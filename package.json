@@ -6,14 +6,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:worker": "node --check scripts/personal-worker.mjs",
+    "check:worker": "node --check scripts/personal-worker.mjs && node --check scripts/personal-worker-launcher.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "ci": "npm run typecheck && npm run check:worker && npm test",
-    "worker": "node scripts/personal-worker.mjs",
-    "worker:doctor": "node scripts/personal-worker.mjs doctor",
-    "worker:login": "node scripts/personal-worker.mjs login",
-    "worker:once": "node scripts/personal-worker.mjs once",
-    "worker:start": "node scripts/personal-worker.mjs start"
+    "worker": "node scripts/personal-worker-launcher.mjs",
+    "worker:doctor": "node scripts/personal-worker-launcher.mjs doctor",
+    "worker:login": "node scripts/personal-worker-launcher.mjs login",
+    "worker:once": "node scripts/personal-worker-launcher.mjs once",
+    "worker:start": "node scripts/personal-worker-launcher.mjs start"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
