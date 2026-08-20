@@ -9,9 +9,11 @@ export async function POST(request: Request) {
     const run = await createDashboardRun(body.repository ?? "", body.goal ?? "");
     return NextResponse.json({ runId: run.id, run });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Project creation failed";
+    const persistenceBlocked = message.includes("Production requires SUPABASE_URL");
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Project creation failed" },
-      { status: 400 },
+      { error: message },
+      { status: persistenceBlocked ? 503 : 400 },
     );
   }
 }
