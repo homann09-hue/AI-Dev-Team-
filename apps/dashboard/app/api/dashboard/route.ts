@@ -26,7 +26,13 @@ export async function GET(request: Request) {
         status: run.status,
         updatedAt: run.updatedAt,
         currentPhase: run.workItems[0]?.state ?? "todo",
-        workItems: run.workItems.map((item) => ({ id: item.id, title: item.title, state: item.state, attempt: item.attempt })),
+        workItems: run.workItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          state: item.state,
+          attempt: item.attempt,
+          evidence: item.evidence,
+        })),
       })),
     }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
