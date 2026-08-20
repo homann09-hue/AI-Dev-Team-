@@ -1,8 +1,9 @@
 import type { ActionExecutor } from "../actions/action.js";
 import type { Agent, AgentContext, AgentResult } from "./agent.js";
+import { buildAgentContext } from "./context-builder.js";
 import { parseStructuredAgentOutput } from "./structured-output.js";
 import type { AgentRole, Evidence } from "../core/types.js";
-import { compactEvidence, DEFAULT_EFFICIENCY_POLICY, outputBudget, type EfficiencyPolicy } from "../efficiency/policy.js";
+import { DEFAULT_EFFICIENCY_POLICY, outputBudget, type EfficiencyPolicy } from "../efficiency/policy.js";
 import type { ModelProvider } from "../providers/provider.js";
 
 export interface ModelAgentOptions {
@@ -29,22 +30,10 @@ export class ModelAgent implements Agent {
   }
 
   async execute(context: AgentContext): Promise<AgentResult> {
-    const priorEvidence = compactEvidence(context.priorEvidence, this.efficiencyPolicy);
+    const promptContext = buildAgentContext(this.role, context.run, context.workItem, context.priorEvidence, this.efficiencyPolicy);
     const response = await this.provider.generate({
       system: `${this.systemPrompt}\nReturn JSON only: {"summary":string,"approved"?:boolean,"blocker"?:string,"actions":AgentAction[]}. Request only actions needed for this task.`,
-      prompt: JSON.stringify({
-        goal: context.run.masterGoal,
-        repo: context.run.repository,
-        task: {
-          id: context.workItem.id,
-          title: context.workItem.title,
-          objective: context.workItem.objective,
-          acceptanceCriteria: context.workItem.acceptanceCriteria,
-          state: context.workItem.state,
-          attempt: context.workItem.attempt,
-        },
-        evidence: priorEvidence,
-      }),
+      prompt: JSON.stringify(promptContext),
       maxOutputTokens: outputBudget(this.role, this.efficiencyPolicy),
       metadata: { runId: context.run.id, workItemId: context.workItem.id, role: this.role },
     });
