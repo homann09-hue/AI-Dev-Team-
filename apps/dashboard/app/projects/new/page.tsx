@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { createProject, executeRun } from "../../../src/api/client";
+import { createProject } from "../../../src/api/client";
 
 export default function NewProjectPage() {
   const [repository, setRepository] = useState("");
@@ -25,14 +25,12 @@ export default function NewProjectPage() {
     }
     setSubmitting(true);
     try {
-      setStatus("Creating authenticated run…");
+      setStatus("Creating run and queueing it for your Mac…");
       const created = await createProject({ repository: repo, goal: masterGoal });
       setRunId(created.runId);
-      setStatus("Running Architect → Developer → CI → Review → QA → Deploy → Live Verify…");
-      const executed = await executeRun(created.runId);
-      setStatus(`Run finished with outcome: ${executed.outcome}`);
+      setStatus("Queued. Your local worker will use Claude → Codex → tests → Grok → GitHub delivery.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Run execution failed");
+      setError(err instanceof Error ? err.message : "Project queueing failed");
     } finally {
       setSubmitting(false);
     }
@@ -42,9 +40,9 @@ export default function NewProjectPage() {
     <main className="shell">
       <header className="topbar">
         <div>
-          <div className="eyebrow">New run</div>
+          <div className="eyebrow">New local run</div>
           <h1>Start project</h1>
-          <p className="subtitle">One repository, one master goal, one gated full-agent execution. Missing runtime configuration fails closed instead of simulating success.</p>
+          <p className="subtitle">The dashboard stores only the job. Your authenticated Mac runs Codex, Claude and Grok locally through your existing subscriptions.</p>
         </div>
         <a className="button" href="/">Back to dashboard</a>
       </header>
@@ -52,16 +50,16 @@ export default function NewProjectPage() {
         <form className="form" onSubmit={submit}>
           <label className="field">
             <span>Repository</span>
-            <input value={repository} onChange={(e) => setRepository(e.target.value)} placeholder="owner/repository" />
+            <input value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="owner/repository" />
           </label>
           <label className="field">
             <span>Master goal</span>
-            <textarea value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Build this product to the specified Definition of Done..." />
+            <textarea value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="Build this product to the specified Definition of Done..." />
           </label>
           {error ? <div className="error">{error}</div> : null}
           {status ? <div className="status"><span className="dot" /> {status}</div> : null}
           {runId ? <div className="muted">Run ID: {runId}</div> : null}
-          <button className="button" type="submit" disabled={submitting}>{submitting ? "Agents running…" : "Start agents"}</button>
+          <button className="button" type="submit" disabled={submitting}>{submitting ? "Queueing…" : "Queue agents"}</button>
         </form>
       </section>
     </main>
