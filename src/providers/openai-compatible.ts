@@ -1,4 +1,4 @@
-import type { ModelProvider, ModelRequest, ModelResponse } from "./provider.js";
+import type { ModelProvider, ModelRequest, ModelResponse, ModelUsage } from "./provider.js";
 
 export interface OpenAICompatibleOptions {
   name: string;
@@ -49,14 +49,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const text = data.choices?.[0]?.message?.content;
     if (!text) throw new Error(`${this.name} returned no text output`);
 
+    const usage: ModelUsage = {};
+    if (data.usage?.prompt_tokens !== undefined) usage.inputTokens = data.usage.prompt_tokens;
+    if (data.usage?.completion_tokens !== undefined) usage.outputTokens = data.usage.completion_tokens;
+
     return {
       text,
       model: this.model,
       provider: this.name,
-      usage: {
-        inputTokens: data.usage?.prompt_tokens,
-        outputTokens: data.usage?.completion_tokens,
-      },
+      ...(Object.keys(usage).length === 0 ? {} : { usage }),
     };
   }
 }
