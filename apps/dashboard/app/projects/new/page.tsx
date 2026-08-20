@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { createProject } from "../../src/api/client";
+import { useState } from "react";
+import type { FormEvent } from "react";
+import { createProject } from "../../../src/api/client";
 
 export default function NewProjectPage() {
   const [repository, setRepository] = useState("");
@@ -41,7 +42,7 @@ export default function NewProjectPage() {
         </div>
         <a className="button" href="/">Back to dashboard</a>
       </header>
-      <section className="card" style={{maxWidth:760}}>
+      <section className="card" style={{ maxWidth: 760 }}>
         <form className="form" onSubmit={submit}>
           <label className="field">
             <span>Repository</span>
