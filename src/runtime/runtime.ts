@@ -1,12 +1,15 @@
 import type { Agent } from "../agents/agent.js";
 import type { ProjectRun, WorkItem, WorkState } from "../core/types.js";
+import { assertAttemptBudget, DEFAULT_EFFICIENCY_POLICY, type EfficiencyPolicy } from "../efficiency/policy.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
 import type { RunStore } from "../storage/run-store.js";
 
 export class Runtime {
   private readonly orchestrator = new Orchestrator();
+  private readonly efficiencyPolicy: EfficiencyPolicy;
 
-  constructor(private readonly store: RunStore, agents: readonly Agent[]) {
+  constructor(private readonly store: RunStore, agents: readonly Agent[], efficiencyPolicy: EfficiencyPolicy = DEFAULT_EFFICIENCY_POLICY) {
+    this.efficiencyPolicy = efficiencyPolicy;
     for (const agent of agents) this.orchestrator.register(agent);
   }
 
@@ -59,6 +62,7 @@ export class Runtime {
     const run = await this.requireRun(runId);
     const item = run.workItems.find((candidate) => candidate.id === workItemId);
     if (!item) throw new Error(`Unknown work item: ${workItemId}`);
+    assertAttemptBudget(item, this.efficiencyPolicy);
     const result = await this.orchestrator.executeCurrent(run, item);
     item.evidence.push(...result.evidence);
     item.attempt += 1;
