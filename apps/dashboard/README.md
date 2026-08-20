@@ -1,14 +1,18 @@
-# AI Dev Team Dashboard
+# AI Dev Team Dashboard MVP
 
-Frontend foundation for monitoring multi-agent development runs.
+Frontend foundation for operating multi-agent development runs.
 
-Planned views:
+Implemented direction:
 
-- Project creation
-- Active runs
-- Agent timeline
-- Token and cost metrics
-- Gate status
+- Project creation flow
+- Active runs overview
+- Agent execution timeline
+- Token and cost dashboard
+- Gate status monitoring
 - Evidence history
 
-The dashboard consumes API services and never bypasses orchestrator policies.
+Architecture:
+
+`Dashboard UI -> API Services -> Runtime -> Orchestrator -> Agents`
+
+The frontend consumes API contracts and never bypasses orchestrator policies.
