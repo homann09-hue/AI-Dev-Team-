@@ -10,7 +10,9 @@ export async function GET() {
     {
       status: configured ? "ok" : "blocked",
       persistence: "supabase-rls",
-      auth: "supabase-magic-link",
+      auth: "supabase-email-otp",
+      execution: "personal-mac-worker",
+      modelSecretsInCloud: false,
       configured,
       checkedAt: new Date().toISOString(),
     },
