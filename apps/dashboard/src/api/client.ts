@@ -12,6 +12,16 @@ export interface DashboardEvidence {
   createdAt: string;
 }
 
+export interface DashboardJob {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  workerId?: string | null;
+  attempt: number;
+  lastError?: string | null;
+  heartbeatAt?: string | null;
+  updatedAt: string;
+}
+
 export interface DashboardWorkItem {
   id: string;
   title: string;
@@ -27,13 +37,16 @@ export interface DashboardRun {
   status: string;
   updatedAt: string;
   currentPhase: string;
+  job?: DashboardJob;
   workItems: DashboardWorkItem[];
 }
 
 export interface DashboardOverview {
   generatedAt: string;
   persistence: "supabase-rls";
+  execution: "personal-mac-worker";
   user: { id: string; email?: string };
+  worker: { online: boolean; workerId?: string; lastSeenAt?: string };
   activeRuns: number;
   totalRuns: number;
   totalWorkItems: number;
@@ -43,11 +56,12 @@ export interface DashboardOverview {
 export interface CreateProjectResponse {
   runId: string;
   run: DashboardRun;
+  job: DashboardJob;
 }
 
 export interface ExecuteRunResponse {
-  outcome: "done" | "blocked" | "failed";
-  run: DashboardRun;
+  queued: true;
+  job: DashboardJob;
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -62,7 +76,6 @@ export async function createProject(request: CreateProjectRequest): Promise<Crea
     headers: { "content-type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify(request),
   });
-
   const body = (await response.json()) as CreateProjectResponse | { error?: string };
   if (!response.ok) throw new Error("error" in body && body.error ? body.error : "Project creation failed");
   return body as CreateProjectResponse;
@@ -74,7 +87,7 @@ export async function executeRun(runId: string): Promise<ExecuteRunResponse> {
     headers: await authHeaders(),
   });
   const body = (await response.json()) as ExecuteRunResponse | { error?: string };
-  if (!response.ok) throw new Error("error" in body && body.error ? body.error : "Run execution failed");
+  if (!response.ok) throw new Error("error" in body && body.error ? body.error : "Run queueing failed");
   return body as ExecuteRunResponse;
 }
 
