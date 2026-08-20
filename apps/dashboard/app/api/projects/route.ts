@@ -18,13 +18,14 @@ export async function POST(request: Request) {
     const run = await projectRuntime.createRun(repository, goal);
     const item = await projectRuntime.addWorkItem(
       run.id,
-      "Plan master goal",
+      "Execute master goal",
       goal,
-      ["Architecture and execution plan produced", "Acceptance criteria defined before implementation"],
+      ["Master goal implemented", "Deterministic tests pass", "Independent review approves", "Changes delivered to GitHub"],
     );
     await projectRuntime.transition(run.id, item.id, "planning");
     const persisted = (await store.get(run.id)) ?? run;
-    return NextResponse.json({ runId: persisted.id, run: persisted });
+    const job = await store.enqueue(persisted.id);
+    return NextResponse.json({ runId: persisted.id, run: persisted, job });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Project creation failed";
     const status = message.includes("authentication") || message.includes("session") ? 401 : 400;

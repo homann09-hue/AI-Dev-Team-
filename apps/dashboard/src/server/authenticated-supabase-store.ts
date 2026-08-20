@@ -5,6 +5,29 @@ import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "../lib/supabase";
 interface SupabaseUser { id: string; email?: string }
 interface RunRow { payload: ProjectRun }
 
+export type AgentJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface AgentJob {
+  id: string;
+  run_id: string;
+  user_id: string;
+  status: AgentJobStatus;
+  worker_id: string | null;
+  attempt: number;
+  last_error: string | null;
+  claimed_at: string | null;
+  heartbeat_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkerPresence {
+  user_id: string;
+  worker_id: string;
+  last_seen_at: string;
+  details: Record<string, unknown>;
+}
+
 export async function authenticateRequest(request: Request): Promise<{ token: string; user: SupabaseUser }> {
   const authorization = request.headers.get("authorization") ?? "";
   const match = authorization.match(/^Bearer\s+(.+)$/i);
@@ -43,6 +66,37 @@ export class AuthenticatedSupabaseRunStore implements RunStore {
     return rows.map((row) => row.payload);
   }
 
+  async enqueue(runId: string): Promise<AgentJob> {
+    const now = new Date().toISOString();
+    const rows = await this.request<AgentJob[]>("/rest/v1/agent_jobs?on_conflict=run_id", {
+      method: "POST",
+      headers: { prefer: "resolution=merge-duplicates,return=representation" },
+      body: JSON.stringify([{
+        run_id: runId,
+        user_id: this.userId,
+        status: "queued",
+        worker_id: null,
+        last_error: null,
+        claimed_at: null,
+        heartbeat_at: null,
+        updated_at: now,
+      }]),
+    });
+    const job = rows[0];
+    if (!job) throw new Error("Supabase did not return the queued job");
+    return job;
+  }
+
+  async listJobs(): Promise<AgentJob[]> {
+    const query = new URLSearchParams({ user_id: `eq.${this.userId}`, select: "*", order: "updated_at.desc" });
+    return this.request<AgentJob[]>(`/rest/v1/agent_jobs?${query.toString()}`);
+  }
+
+  async listWorkers(): Promise<WorkerPresence[]> {
+    const query = new URLSearchParams({ user_id: `eq.${this.userId}`, select: "*", order: "last_seen_at.desc" });
+    return this.request<WorkerPresence[]>(`/rest/v1/worker_presence?${query.toString()}`);
+  }
+
   private async request<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(`${SUPABASE_URL}${path}`, {
       ...init,
@@ -58,7 +112,8 @@ export class AuthenticatedSupabaseRunStore implements RunStore {
       const detail = await response.text();
       throw new Error(`Supabase request failed (${response.status}): ${detail.slice(0, 300)}`);
     }
-    if (response.status === 204 || response.headers.get("content-length") === "0") return undefined as T;
-    return response.json() as Promise<T>;
+    const text = await response.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
   }
 }
