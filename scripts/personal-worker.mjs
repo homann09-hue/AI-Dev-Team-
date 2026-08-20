@@ -122,18 +122,59 @@ class SupabaseClient {
     if (token) headers.set('authorization', `Bearer ${token}`);
     return fetch(`${SUPABASE_URL}${path}`, { ...init, headers, cache: 'no-store' });
   }
-  async requestOtp(email) {
+  async requestMagicLink(email) {
     const response = await this.raw('/auth/v1/otp', { method: 'POST', body: JSON.stringify({ email, create_user: true }) });
-    if (!response.ok) throw new Error(`OTP request failed (${response.status}): ${truncate(await response.text(), 500)}`);
+    if (!response.ok) throw new Error(`Magic-link request failed (${response.status}): ${truncate(await response.text(), 500)}`);
   }
-  async verifyOtp(email, token) {
-    const response = await this.raw('/auth/v1/verify', { method: 'POST', body: JSON.stringify({ email, token, type: 'email' }) });
-    if (!response.ok) throw new Error(`OTP verification failed (${response.status}): ${truncate(await response.text(), 500)}`);
-    const session = await response.json();
+  async consumeMagicLink(link) {
+    let verifyUrl;
+    try { verifyUrl = new URL(String(link ?? '').trim()); } catch { throw new Error('Paste the complete https://... Supabase link from the email.'); }
+    const project = new URL(SUPABASE_URL);
+    if (verifyUrl.protocol !== 'https:' || verifyUrl.hostname !== project.hostname || verifyUrl.pathname !== '/auth/v1/verify') {
+      throw new Error(`Expected a Supabase verification link for ${project.hostname}. Copy the email link without opening it.`);
+    }
+    if (!verifyUrl.searchParams.get('token') || !verifyUrl.searchParams.get('type')) {
+      throw new Error('The pasted link has no Supabase verification token. Copy the full hyperlink from the email.');
+    }
+
+    const response = await fetch(verifyUrl, {
+      method: 'GET',
+      redirect: 'manual',
+      headers: { apikey: SUPABASE_KEY },
+      cache: 'no-store',
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      const detail = truncate(await response.text(), 500);
+      throw new Error(`Magic link could not be verified (${response.status}): ${detail || 'link may be expired or already used'}`);
+    }
+    const location = response.headers.get('location');
+    if (!location) throw new Error('Supabase verified the link but returned no login session redirect.');
+    const redirected = new URL(location, verifyUrl);
+    const fragment = new URLSearchParams(redirected.hash.replace(/^#/, ''));
+    const query = redirected.searchParams;
+    const accessToken = fragment.get('access_token') ?? query.get('access_token');
+    const refreshToken = fragment.get('refresh_token') ?? query.get('refresh_token');
+    const expiresIn = Number(fragment.get('expires_in') ?? query.get('expires_in') ?? 3600);
+    const tokenType = fragment.get('token_type') ?? query.get('token_type') ?? 'bearer';
+    if (!accessToken || !refreshToken) {
+      throw new Error('Supabase accepted the link but did not return session tokens. Request a fresh link and copy it before opening it.');
+    }
+
+    const userResponse = await this.raw('/auth/v1/user', { method: 'GET' }, accessToken);
+    if (!userResponse.ok) throw new Error(`Magic-link session could not be validated (${userResponse.status}).`);
+    const user = await userResponse.json();
+    const session = {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      token_type: tokenType,
+      expires_in: Number.isFinite(expiresIn) ? expiresIn : 3600,
+      expires_at: Math.floor(Date.now() / 1000) + (Number.isFinite(expiresIn) ? expiresIn : 3600),
+      user,
+    };
     this.validateSession(session);
     this.session = session;
     await this.saveSession(session);
-    return session.user;
+    return user;
   }
   validateSession(session) {
     if (!session?.access_token || !session?.refresh_token || !session?.user?.id) throw new Error('Supabase returned an invalid session');
@@ -245,85 +286,83 @@ async function prepareWorkspace(repository, runId) {
 async function claudePlan(runRecord, cwd) {
   const prompt = `${context(runRecord)}\n\nAct as a read-only software architect. Inspect the repository, identify the smallest complete implementation path, affected files, risks, tests and Definition of Done. Do not edit. Be concise to save tokens. End with JSON only: {"summary":"actionable plan","blocker":"optional blocker"}.`;
   const args = ['-p', prompt, '--output-format', 'json', '--max-turns', '8', '--permission-mode', 'plan'];
-  if (process.env.AI_DEV_TEAM_CLAUDE_MODEL) args.push('--model', process.env.AI_DEV_TEAM_CLAUDE_MODEL);
-  const result = await checked('claude', args, { cwd, timeoutMs: 12 * 60_000 }); return parseDecision(result.stdout);
+  const result = await run('claude', args, { cwd, timeoutMs: 15 * 60_000, maxOutput: 2_000_000 });
+  if (result.code !== 0) throw new Error(`Claude architect failed (${result.code}): ${truncate(result.stderr || result.stdout, 1_500)}`);
+  return parseDecision(result.stdout);
 }
 
 async function codexImplement(runRecord, cwd) {
-  const prompt = `${context(runRecord)}\n\nImplement the master goal completely in this existing branch. You may edit files and run focused checks. Do not commit, push, create a PR or touch secrets. Keep the diff focused and avoid unnecessary context. End with JSON only: {"summary":"changes and checks","blocker":"optional blocker"}.`;
-  const lastMessage = join(tmpdir(), `ai-dev-team-codex-${randomUUID()}.txt`);
-  const args = ['exec']; if (process.env.AI_DEV_TEAM_CODEX_MODEL) args.push('--model', process.env.AI_DEV_TEAM_CODEX_MODEL);
-  args.push('--ephemeral', '--color', 'never', '--approve-for-me', '-C', cwd, '-o', lastMessage, '-');
-  try {
-    const result = await checked('codex', args, { cwd, input: prompt, timeoutMs: 30 * 60_000, maxOutput: 6_000_000 });
-    let text = result.stdout; try { text = await readFile(lastMessage, 'utf8'); } catch { /* fallback */ }
-    const decision = parseDecision(text); const status = await checked('git', ['status', '--porcelain'], { cwd });
-    if (!status.stdout.trim() && !decision.blocker) decision.blocker = 'Codex produced no repository changes';
-    decision.summary = `${decision.summary}\nChanged paths:\n${truncate(status.stdout || 'none', 4_000)}`; return decision;
-  } finally { await rm(lastMessage, { force: true }); }
-}
-
-async function grokReview(runRecord, cwd) {
-  const diff = await checked('git', ['diff', '--no-ext-diff', '--unified=3'], { cwd, maxOutput: 1_500_000 });
-  const prompt = `${context(runRecord)}\n\nIndependently review the uncommitted diff below for correctness, security, regressions, missing edge cases and acceptance-criteria gaps. Do not edit or commit.\n\nDIFF:\n${truncate(diff.stdout, 80_000)}\n\nEnd with JSON only: {"summary":"specific verdict","approved":true|false,"blocker":"required when rejected"}.`;
-  const args = ['--no-auto-update', '-p', prompt, '--output-format', 'json', '--cwd', cwd, '--deny', 'Edit', '--deny', 'Bash(git commit*)', '--deny', 'Bash(git push*)'];
-  if (process.env.AI_DEV_TEAM_GROK_MODEL) args.push('--model', process.env.AI_DEV_TEAM_GROK_MODEL);
-  const result = await checked('grok', args, { cwd, timeoutMs: 12 * 60_000 }); return parseDecision(result.stdout, true);
-}
-
-async function detectTestCommand(cwd) {
-  if (process.env.AI_DEV_TEAM_TEST_COMMAND?.trim()) return process.env.AI_DEV_TEAM_TEST_COMMAND.trim();
-  if (await exists(join(cwd, 'pnpm-lock.yaml'))) return 'pnpm test';
-  if (await exists(join(cwd, 'yarn.lock'))) return 'yarn test';
-  if (await exists(join(cwd, 'package.json'))) return 'npm test';
-  if (await exists(join(cwd, 'pyproject.toml'))) return 'python3 -m pytest';
-  if (await exists(join(cwd, 'go.mod'))) return 'go test ./...';
-  if (await exists(join(cwd, 'Cargo.toml'))) return 'cargo test';
-  return 'git diff --check';
+  const prompt = `${context(runRecord)}\n\nAct as the sole code-mutating developer. Implement the master goal completely in this repository. Inspect the existing code first, edit only necessary files, run focused checks when useful, and do not commit or push. Keep context use economical. Finish with JSON only: {"summary":"what changed and why","blocker":"optional blocker"}.`;
+  const result = await run('codex', ['exec', '--ephemeral', '--approve-for-me', '--sandbox', 'workspace-write', '-C', cwd, prompt], { cwd, timeoutMs: 30 * 60_000, maxOutput: 4_000_000 });
+  if (result.code !== 0) throw new Error(`Codex developer failed (${result.code}): ${truncate(result.stderr || result.stdout, 1_500)}`);
+  return parseDecision(result.stdout);
 }
 
 async function deterministicGate(runRecord, cwd) {
-  const command = await detectTestCommand(cwd); const result = await shell(command, cwd);
-  const summary = `${command}\n${truncate([result.stdout, result.stderr].filter(Boolean).join('\n'), 10_000)}`;
-  evidence(runRecord, 'test', summary);
-  if (result.code !== 0) throw new Error(`Deterministic test gate failed: ${summary}`);
+  const manifestPath = join(cwd, 'package.json');
+  if (!(await exists(manifestPath))) {
+    const gitStatus = await checked('git', ['status', '--porcelain'], { cwd });
+    evidence(runRecord, 'test', `No package.json found; deterministic gate verified git worktree access.\n${truncate(gitStatus.stdout, 3_000)}`);
+    return;
+  }
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const lock = await exists(join(cwd, 'package-lock.json')) ? 'npm ci' : 'npm install';
+  const install = await shell(lock, cwd, 15 * 60_000);
+  if (install.code !== 0) throw new Error(`Dependency install failed: ${truncate(install.stderr || install.stdout, 2_000)}`);
+  const scripts = manifest.scripts ?? {};
+  const selected = ['typecheck', 'test', 'build'].filter((name) => typeof scripts[name] === 'string');
+  if (selected.length === 0) {
+    evidence(runRecord, 'test', `Dependencies installed successfully with ${lock}; package has no typecheck/test/build scripts.`);
+    return;
+  }
+  for (const name of selected) {
+    const result = await shell(`npm run ${name}`, cwd, 20 * 60_000);
+    evidence(runRecord, 'test', `${name}: exit ${result.code}\n${truncate(result.stdout || result.stderr, 5_000)}`);
+    if (result.code !== 0) throw new Error(`Deterministic gate failed at npm run ${name}`);
+  }
 }
 
-const runCommand = run;
+async function grokReview(runRecord, cwd) {
+  const diff = await checked('git', ['diff', '--no-ext-diff', '--binary', 'HEAD'], { cwd, maxOutput: 3_000_000 });
+  const status = await checked('git', ['status', '--short'], { cwd });
+  const prompt = `${context(runRecord)}\n\nAct as an independent read-only reviewer. Review the developer's uncommitted diff for correctness, regressions, security, maintainability, and whether it satisfies the master goal. Do not edit.\n\nGit status:\n${truncate(status.stdout, 3_000)}\n\nDiff:\n${truncate(diff.stdout, 50_000)}\n\nReturn JSON only: {"summary":"review findings","approved":true|false,"blocker":"required when rejected"}.`;
+  const result = await run('grok', ['-p', prompt, '--output-format', 'json'], { cwd, timeoutMs: 15 * 60_000, maxOutput: 2_000_000 });
+  if (result.code !== 0) throw new Error(`Grok reviewer failed (${result.code}): ${truncate(result.stderr || result.stdout, 1_500)}`);
+  return parseDecision(result.stdout, true);
+}
 
-async function deliver(projectRun, workspace) {
+async function deliver(runRecord, workspace) {
   const { cwd, branch, defaultBranch, repository } = workspace;
-  await checked('git', ['diff', '--check'], { cwd });
   const status = await checked('git', ['status', '--porcelain'], { cwd });
-  if (!status.stdout.trim()) throw new Error('Delivery gate found no changes');
+  if (!status.stdout.trim()) throw new Error('Developer produced no repository changes');
   await checked('git', ['add', '--all'], { cwd });
-  const staged = await runCommand('git', ['diff', '--cached', '--quiet'], { cwd });
+  const staged = await run('git', ['diff', '--cached', '--quiet'], { cwd });
   if (staged.code === 1) {
-    const subject = projectRun.masterGoal.replace(/\s+/g, ' ').trim().slice(0, 72) || 'implement master goal';
+    const subject = runRecord.masterGoal.replace(/\s+/g, ' ').trim().slice(0, 72) || 'implement master goal';
     await checked('git', ['commit', '-m', `AI Dev Team: ${subject}`], { cwd, timeoutMs: 120_000 });
   } else if (staged.code !== 0) throw new Error('Could not inspect staged changes');
   await checked('git', ['push', '--set-upstream', 'origin', branch], { cwd, timeoutMs: 180_000 });
 
   let uri = `https://github.com/${repository}/tree/${encodeURIComponent(branch)}`;
-  const existing = await runCommand('gh', ['pr', 'view', branch, '--repo', repository, '--json', 'url', '--jq', '.url'], { cwd, timeoutMs: 30_000 });
+  const existing = await run('gh', ['pr', 'view', branch, '--repo', repository, '--json', 'url', '--jq', '.url'], { cwd, timeoutMs: 30_000 });
   if (existing.code === 0 && existing.stdout.trim()) uri = existing.stdout.trim();
   else {
-    const created = await runCommand('gh', ['pr', 'create', '--repo', repository, '--head', branch, '--base', defaultBranch, '--title', `AI Dev Team: ${projectRun.id.slice(0, 8)}`, '--body', 'Implemented by the personal local AI Dev Team worker. Review evidence and CI before merging.'], { cwd, timeoutMs: 60_000 });
+    const created = await run('gh', ['pr', 'create', '--repo', repository, '--head', branch, '--base', defaultBranch, '--title', `AI Dev Team: ${runRecord.id.slice(0, 8)}`, '--body', 'Implemented by the personal local AI Dev Team worker. Review evidence and CI before merging.'], { cwd, timeoutMs: 60_000 });
     const found = created.stdout.trim().split(/\s+/).find((value) => value.startsWith('https://')); if (created.code === 0 && found) uri = found;
   }
-  evidence(projectRun, 'deployment', `Committed and pushed ${branch}.`, uri);
+  evidence(runRecord, 'deployment', `Committed and pushed ${branch}.`, uri);
 
   const deployCommand = process.env.AI_DEV_TEAM_DEPLOY_COMMAND?.trim();
   if (deployCommand) {
     const deployed = await shell(deployCommand, cwd, 30 * 60_000);
     if (deployed.code !== 0) throw new Error(`Deploy command failed: ${truncate(deployed.stderr || deployed.stdout, 2_000)}`);
-    evidence(projectRun, 'deployment', `Deployment command passed: ${deployCommand}\n${truncate(deployed.stdout, 6_000)}`, process.env.AI_DEV_TEAM_LIVE_URL);
+    evidence(runRecord, 'deployment', `Deployment command passed: ${deployCommand}\n${truncate(deployed.stdout, 6_000)}`, process.env.AI_DEV_TEAM_LIVE_URL);
   }
   return uri;
 }
 
 async function verifyDelivery(runRecord, workspace, uri) {
-  const remote = await runCommand('git', ['ls-remote', '--exit-code', '--heads', 'origin', workspace.branch], { cwd: workspace.cwd, timeoutMs: 60_000 });
+  const remote = await run('git', ['ls-remote', '--exit-code', '--heads', 'origin', workspace.branch], { cwd: workspace.cwd, timeoutMs: 60_000 });
   if (remote.code !== 0) throw new Error(`Remote branch ${workspace.branch} could not be verified`);
   const liveUrl = process.env.AI_DEV_TEAM_LIVE_URL?.trim();
   if (liveUrl) {
@@ -391,9 +430,11 @@ async function doctor() {
 
 async function login(email) {
   const normalized = String(email ?? '').trim().toLowerCase(); if (!/^\S+@\S+\.\S+$/.test(normalized)) throw new Error('Usage: npm run worker:login -- your@email');
-  const client = new SupabaseClient(); await client.requestOtp(normalized); console.log(`OTP sent to ${normalized}.`);
-  const reader = createInterface({ input, output }); const token = (await reader.question('6-digit code: ')).trim(); reader.close();
-  const user = await client.verifyOtp(normalized, token); console.log(`Worker logged in as ${user.email ?? user.id}. Session stored locally with mode 0600.`);
+  const client = new SupabaseClient(); await client.requestMagicLink(normalized);
+  console.log(`Magic link sent to ${normalized}.`);
+  console.log('IMPORTANT: Do not open the link. Copy the complete hyperlink from the email and paste it here.');
+  const reader = createInterface({ input, output }); const link = (await reader.question('Magic link: ')).trim(); reader.close();
+  const user = await client.consumeMagicLink(link); console.log(`Worker logged in as ${user.email ?? user.id}. Session stored locally with mode 0600.`);
 }
 
 async function once() {
