@@ -1,19 +1,19 @@
 {
   "name": "ai-dev-team",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:worker": "node --check scripts/personal-worker.mjs && node --check scripts/personal-worker-launcher.mjs && node --check scripts/magic-link-login.mjs",
+    "check:worker": "node --check scripts/paired-worker.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "ci": "npm run typecheck && npm run check:worker && npm test",
-    "worker": "node scripts/personal-worker-launcher.mjs",
-    "worker:doctor": "node scripts/personal-worker-launcher.mjs doctor",
-    "worker:login": "node scripts/personal-worker-launcher.mjs login",
-    "worker:once": "node scripts/personal-worker-launcher.mjs once",
-    "worker:start": "node scripts/personal-worker-launcher.mjs start"
+    "worker": "node scripts/paired-worker.mjs",
+    "worker:pair": "node scripts/paired-worker.mjs pair",
+    "worker:doctor": "node scripts/paired-worker.mjs doctor",
+    "worker:once": "node scripts/paired-worker.mjs once",
+    "worker:start": "node scripts/paired-worker.mjs start"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
