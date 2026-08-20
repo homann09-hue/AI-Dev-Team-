@@ -42,7 +42,24 @@ export const runtime = globalState.__aiDevTeamRuntime ?? new Runtime(runStore, [
 globalState.__aiDevTeamRunStore = runStore;
 globalState.__aiDevTeamRuntime = runtime;
 
+export function getPersistenceHealth() {
+  const production = process.env.VERCEL_ENV === "production";
+  const ready = !production || persistenceMode === "supabase";
+  return {
+    ready,
+    production,
+    persistence: persistenceMode,
+    reason: ready ? null : "Production requires SUPABASE_URL and SUPABASE_SECRET_KEY",
+  };
+}
+
+function assertPersistenceReady(): void {
+  const health = getPersistenceHealth();
+  if (!health.ready) throw new Error(health.reason ?? "Persistence unavailable");
+}
+
 export async function createDashboardRun(repository: string, goal: string): Promise<ProjectRun> {
+  assertPersistenceReady();
   const normalizedRepository = repository.trim();
   const normalizedGoal = goal.trim();
   if (!/^[-_.A-Za-z0-9]+\/[-_.A-Za-z0-9]+$/.test(normalizedRepository)) {
@@ -62,6 +79,7 @@ export async function createDashboardRun(repository: string, goal: string): Prom
 }
 
 export async function getDashboardOverview() {
+  assertPersistenceReady();
   const runs = await runStore.list();
   const activeRuns = runs.filter((run) => run.status === "active");
   const totalWorkItems = runs.reduce((sum, run) => sum + run.workItems.length, 0);
