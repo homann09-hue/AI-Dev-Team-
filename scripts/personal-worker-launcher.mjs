@@ -13,4 +13,9 @@ if (!process.env.AI_DEV_TEAM_TEST_COMMAND?.trim()) {
   ].join("; ");
 }
 
-await import("./personal-worker.mjs");
+if (process.argv[2] === "login") {
+  process.argv.splice(2, 1);
+  await import("./magic-link-login.mjs");
+} else {
+  await import("./personal-worker.mjs");
+}

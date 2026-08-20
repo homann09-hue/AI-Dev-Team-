@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:worker": "node --check scripts/personal-worker.mjs && node --check scripts/personal-worker-launcher.mjs",
+    "check:worker": "node --check scripts/personal-worker.mjs && node --check scripts/personal-worker-launcher.mjs && node --check scripts/magic-link-login.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "ci": "npm run typecheck && npm run check:worker && npm test",
     "worker": "node scripts/personal-worker-launcher.mjs",
