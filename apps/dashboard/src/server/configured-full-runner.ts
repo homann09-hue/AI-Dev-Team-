@@ -168,7 +168,15 @@ export async function buildConfiguredFullRunner(store: RunStore, run: ProjectRun
   const qa = new ModelAgent({ role: "qa", provider, actionExecutor: actions, systemPrompt: "Validate behavior and test evidence. Do not mutate code. Set approved=true only when quality gates pass." });
   const liveVerifier = new UrlLiveVerifier(config.deploymentUrl);
   const deterministicGate: DeterministicGate = {
-    run: async () => ({ kind: "test", summary: `GitHub CI passed for ${branch}`, createdAt: new Date().toISOString(), uri: `https://github.com/${run.repository}/tree/${branch}` , ...(await waitForCi(run.repository, branch, config.githubToken), {}) }),
+    run: async () => {
+      await waitForCi(run.repository, branch, config.githubToken);
+      return {
+        kind: "test",
+        summary: `GitHub CI passed for ${branch}`,
+        createdAt: new Date().toISOString(),
+        uri: `https://github.com/${run.repository}/tree/${branch}`,
+      };
+    },
   };
 
   return new FullRunExecutor(store, architect, developer, reviewer, qa, liveVerifier, deterministicGate, new AutoDeploymentGate(config.deploymentUrl));
