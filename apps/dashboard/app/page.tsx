@@ -2,32 +2,63 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { getDashboard, type DashboardOverview } from "../src/api/client";
+import { getSupabaseBrowserClient } from "../src/lib/supabase";
 
 function label(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setOverview(await getDashboard());
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Dashboard unavailable");
+      const message = err instanceof Error ? err.message : "Dashboard unavailable";
+      if (message.includes("authentication")) {
+        router.replace("/login");
+        return;
+      }
+      setError(message);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
-    void refresh();
+    const supabase = getSupabaseBrowserClient();
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!data.session) {
+        router.replace("/login");
+        return;
+      }
+      setReady(true);
+      void refresh();
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.replace("/login");
+    });
+    return () => listener.subscription.unsubscribe();
+  }, [refresh, router]);
+
+  useEffect(() => {
+    if (!ready) return;
     const timer = window.setInterval(() => void refresh(), 4000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [ready, refresh]);
+
+  async function signOut() {
+    await getSupabaseBrowserClient().auth.signOut();
+    router.replace("/login");
+  }
 
   const current = overview?.runs[0];
+  if (!ready) return <main className="shell"><p className="muted">Checking session…</p></main>;
 
   return (
     <main className="shell">
@@ -35,9 +66,12 @@ export default function DashboardPage() {
         <div>
           <div className="eyebrow">Control plane · live</div>
           <h1>AI Dev Team</h1>
-          <p className="subtitle">One master goal, gated multi-agent execution and runtime-backed project state.</p>
+          <p className="subtitle">One master goal, gated multi-agent execution and user-scoped persistent state.</p>
         </div>
-        <Link className="button" href="/projects/new">Start project</Link>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Link className="button" href="/projects/new">Start project</Link>
+          <button className="button" onClick={() => void signOut()}>Sign out</button>
+        </div>
       </header>
 
       {error ? <section className="error" style={{ marginBottom: 16 }}>{error}</section> : null}
@@ -47,7 +81,7 @@ export default function DashboardPage() {
           ["Active runs", String(overview?.activeRuns ?? 0)],
           ["Current phase", current ? label(current.currentPhase) : "Idle"],
           ["Work items", String(overview?.totalWorkItems ?? 0)],
-          ["Persistence", overview?.persistence === "memory" ? "Memory" : "—"],
+          ["Persistence", overview?.persistence === "supabase-rls" ? "Supabase RLS" : "—"],
         ].map(([metricLabel, value]) => (
           <article className="card" key={metricLabel}>
             <div className="metric-label">{metricLabel}</div>
@@ -59,10 +93,7 @@ export default function DashboardPage() {
       <section className="grid two">
         <article className="card">
           <div className="agent-head">
-            <div>
-              <div className="eyebrow">Current run</div>
-              <h2>{current?.repository ?? "No active project"}</h2>
-            </div>
+            <div><div className="eyebrow">Current run</div><h2>{current?.repository ?? "No active project"}</h2></div>
             <span className="status"><span className="dot" /> {current ? label(current.status) : "Idle"}</span>
           </div>
           <p className="muted">{current?.goal ?? "Start a project to create the first runtime-backed run."}</p>
@@ -84,8 +115,9 @@ export default function DashboardPage() {
           <p><strong>Runtime API:</strong> connected</p>
           <p><strong>Polling:</strong> every 4 seconds</p>
           <p><strong>Mutation policy:</strong> Developer only</p>
-          <p><strong>Persistence:</strong> in-memory process store</p>
-          <p className="muted">Database persistence is intentionally not claimed yet; server restarts can clear this state.</p>
+          <p><strong>Persistence:</strong> Supabase/Postgres + RLS</p>
+          <p><strong>User:</strong> {overview?.user.email ?? overview?.user.id ?? "authenticated"}</p>
+          <p className="muted">Each authenticated user can read and mutate only their own project runs.</p>
         </article>
       </section>
 

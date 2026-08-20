@@ -1,21 +1,21 @@
 import { NextResponse } from "next/server";
-import { getPersistenceHealth } from "../../../src/server/control-plane";
+import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "../../../src/lib/supabase";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const health = getPersistenceHealth();
+  const configured = Boolean(SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY);
   return NextResponse.json(
     {
-      status: health.ready ? "ok" : "blocked",
-      persistence: health.persistence,
-      production: health.production,
-      reason: health.reason,
+      status: configured ? "ok" : "blocked",
+      persistence: "supabase-rls",
+      auth: "supabase-magic-link",
+      configured,
       checkedAt: new Date().toISOString(),
     },
     {
-      status: health.ready ? 200 : 503,
+      status: configured ? 200 : 503,
       headers: { "cache-control": "no-store" },
     },
   );
