@@ -13,8 +13,16 @@ export async function GET(request: Request) {
     const totalWorkItems = runs.reduce((sum, run) => sum + run.workItems.length, 0);
     const jobsByRun = new Map(jobs.map((job) => [job.run_id, job]));
     const latestWorker = workers[0];
-    const lastSeenAt = latestWorker?.last_seen_at;
-    const workerOnline = Boolean(lastSeenAt && Date.now() - new Date(lastSeenAt).getTime() < 20_000);
+    const runningJob = jobs.find((job) => job.status === "running" && job.heartbeat_at && Date.now() - new Date(job.heartbeat_at).getTime() < 45_000);
+    const presenceSeenAt = latestWorker?.last_seen_at;
+    const heartbeatSeenAt = runningJob?.heartbeat_at ?? undefined;
+    const lastSeenAt = [presenceSeenAt, heartbeatSeenAt]
+      .filter((value): value is string => Boolean(value))
+      .sort((a, b) => b.localeCompare(a))[0];
+    const workerOnline = Boolean(
+      (presenceSeenAt && Date.now() - new Date(presenceSeenAt).getTime() < 30_000)
+      || runningJob,
+    );
 
     return NextResponse.json({
       generatedAt: new Date().toISOString(),
@@ -23,7 +31,7 @@ export async function GET(request: Request) {
       user: { id: user.id, email: user.email },
       worker: {
         online: workerOnline,
-        workerId: latestWorker?.worker_id,
+        workerId: latestWorker?.worker_id ?? runningJob?.worker_id ?? undefined,
         lastSeenAt,
       },
       activeRuns: activeRuns.length,
