@@ -17,7 +17,7 @@ export class ModelAgent implements Agent {
   readonly role: AgentRole;
   private readonly provider: ModelProvider;
   private readonly systemPrompt: string;
-  private readonly actionExecutor?: ActionExecutor;
+  private readonly actionExecutor: ActionExecutor | undefined;
   private readonly efficiencyPolicy: EfficiencyPolicy;
 
   constructor(options: ModelAgentOptions) {
