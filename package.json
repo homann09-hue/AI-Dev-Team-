@@ -1,19 +1,19 @@
 {
   "name": "ai-dev-team",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:worker": "node --check scripts/paired-worker.mjs",
+    "check:worker": "node --check scripts/paired-worker.mjs && bash -n scripts/bin/codex",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "ci": "npm run typecheck && npm run check:worker && npm test",
-    "worker": "node scripts/paired-worker.mjs",
-    "worker:pair": "node scripts/paired-worker.mjs pair",
-    "worker:doctor": "node scripts/paired-worker.mjs doctor",
-    "worker:once": "node scripts/paired-worker.mjs once",
-    "worker:start": "node scripts/paired-worker.mjs start"
+    "worker": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs",
+    "worker:pair": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs pair",
+    "worker:doctor": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs doctor",
+    "worker:once": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs once",
+    "worker:start": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs start"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
