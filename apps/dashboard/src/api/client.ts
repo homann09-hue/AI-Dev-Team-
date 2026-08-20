@@ -5,11 +5,19 @@ export interface CreateProjectRequest {
   goal: string;
 }
 
+export interface DashboardEvidence {
+  kind: string;
+  summary: string;
+  uri?: string;
+  createdAt: string;
+}
+
 export interface DashboardWorkItem {
   id: string;
   title: string;
   state: string;
   attempt: number;
+  evidence: DashboardEvidence[];
 }
 
 export interface DashboardRun {
@@ -37,6 +45,11 @@ export interface CreateProjectResponse {
   run: DashboardRun;
 }
 
+export interface ExecuteRunResponse {
+  outcome: "done" | "blocked" | "failed";
+  run: DashboardRun;
+}
+
 async function authHeaders(): Promise<Record<string, string>> {
   const token = await getAccessToken();
   if (!token) throw new Error("authentication required");
@@ -53,6 +66,16 @@ export async function createProject(request: CreateProjectRequest): Promise<Crea
   const body = (await response.json()) as CreateProjectResponse | { error?: string };
   if (!response.ok) throw new Error("error" in body && body.error ? body.error : "Project creation failed");
   return body as CreateProjectResponse;
+}
+
+export async function executeRun(runId: string): Promise<ExecuteRunResponse> {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/execute`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  const body = (await response.json()) as ExecuteRunResponse | { error?: string };
+  if (!response.ok) throw new Error("error" in body && body.error ? body.error : "Run execution failed");
+  return body as ExecuteRunResponse;
 }
 
 export async function getDashboard(): Promise<DashboardOverview> {

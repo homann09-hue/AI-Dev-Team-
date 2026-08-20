@@ -14,6 +14,17 @@ export interface ModelAgentOptions {
   efficiencyPolicy?: EfficiencyPolicy;
 }
 
+function evidenceKindForRole(role: AgentRole): Evidence["kind"] {
+  switch (role) {
+    case "architect": return "plan";
+    case "developer": return "diff";
+    case "reviewer": return "review";
+    case "qa": return "test";
+    case "live_verifier": return "live_check";
+    case "lead": return "decision";
+  }
+}
+
 export class ModelAgent implements Agent {
   readonly role: AgentRole;
   private readonly provider: ModelProvider;
@@ -47,7 +58,7 @@ export class ModelAgent implements Agent {
     }
 
     const evidence: Evidence = {
-      kind: this.role === "reviewer" ? "review" : this.role === "qa" ? "test" : this.role === "live_verifier" ? "live_check" : "decision",
+      kind: evidenceKindForRole(this.role),
       summary: structured.summary,
       createdAt: new Date().toISOString(),
     };

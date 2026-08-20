@@ -15,13 +15,17 @@ function context(): AgentContext {
   };
 }
 
-test("model agent parses and executes structured actions", async () => {
-  const provider: ModelProvider = {
+function fakeProvider(output: Record<string, unknown>): ModelProvider {
+  return {
     name: "fake",
     async generate() {
-      return { provider: "fake", model: "fake", text: JSON.stringify({ summary: "done", actions: [{ type: "write_file", path: "a.ts", content: "x", message: "change" }] }) };
+      return { provider: "fake", model: "fake", text: JSON.stringify(output) };
     },
   };
+}
+
+test("model agent parses and executes structured actions", async () => {
+  const provider = fakeProvider({ summary: "done", actions: [{ type: "write_file", path: "a.ts", content: "x", message: "change" }] });
   const actions: AgentAction[] = [];
   const executor: ActionExecutor = {
     async execute(_role, action) { actions.push(action); return undefined; },
@@ -29,17 +33,19 @@ test("model agent parses and executes structured actions", async () => {
   const agent = new ModelAgent({ role: "developer", provider, systemPrompt: "Implement", actionExecutor: executor });
   const result = await agent.execute(context());
   assert.equal(result.summary, "done");
+  assert.equal(result.evidence[0]?.kind, "diff");
   assert.equal(actions.length, 1);
   assert.equal(actions[0]?.type, "write_file");
 });
 
+test("architect output is plan evidence for full-run gating", async () => {
+  const agent = new ModelAgent({ role: "architect", provider: fakeProvider({ summary: "plan", actions: [] }), systemPrompt: "Plan" });
+  const result = await agent.execute(context());
+  assert.equal(result.evidence[0]?.kind, "plan");
+});
+
 test("action request without executor fails closed", async () => {
-  const provider: ModelProvider = {
-    name: "fake",
-    async generate() {
-      return { provider: "fake", model: "fake", text: JSON.stringify({ summary: "need read", actions: [{ type: "read_file", path: "a.ts" }] }) };
-    },
-  };
+  const provider = fakeProvider({ summary: "need read", actions: [{ type: "read_file", path: "a.ts" }] });
   const agent = new ModelAgent({ role: "developer", provider, systemPrompt: "Implement" });
   await assert.rejects(agent.execute(context()), /no executor/);
 });

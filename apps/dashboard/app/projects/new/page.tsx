@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { createProject } from "../../../src/api/client";
+import { createProject, executeRun } from "../../../src/api/client";
 
 export default function NewProjectPage() {
   const [repository, setRepository] = useState("");
   const [goal, setGoal] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -15,6 +16,7 @@ export default function NewProjectPage() {
     event.preventDefault();
     setError(null);
     setRunId(null);
+    setStatus(null);
     const repo = repository.trim();
     const masterGoal = goal.trim();
     if (!repo.includes("/") || !masterGoal) {
@@ -23,10 +25,14 @@ export default function NewProjectPage() {
     }
     setSubmitting(true);
     try {
-      const result = await createProject({ repository: repo, goal: masterGoal });
-      setRunId(result.runId);
+      setStatus("Creating authenticated run…");
+      const created = await createProject({ repository: repo, goal: masterGoal });
+      setRunId(created.runId);
+      setStatus("Running Architect → Developer → CI → Review → QA → Deploy → Live Verify…");
+      const executed = await executeRun(created.runId);
+      setStatus(`Run finished with outcome: ${executed.outcome}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Project creation failed");
+      setError(err instanceof Error ? err.message : "Run execution failed");
     } finally {
       setSubmitting(false);
     }
@@ -38,7 +44,7 @@ export default function NewProjectPage() {
         <div>
           <div className="eyebrow">New run</div>
           <h1>Start project</h1>
-          <p className="subtitle">Give the control plane one repository and one master goal. Internal agents handle gated execution.</p>
+          <p className="subtitle">One repository, one master goal, one gated full-agent execution. Missing runtime configuration fails closed instead of simulating success.</p>
         </div>
         <a className="button" href="/">Back to dashboard</a>
       </header>
@@ -53,8 +59,9 @@ export default function NewProjectPage() {
             <textarea value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Build this product to the specified Definition of Done..." />
           </label>
           {error ? <div className="error">{error}</div> : null}
-          {runId ? <div className="status"><span className="dot" /> Run created: {runId}</div> : null}
-          <button className="button" type="submit" disabled={submitting}>{submitting ? "Starting…" : "Start agents"}</button>
+          {status ? <div className="status"><span className="dot" /> {status}</div> : null}
+          {runId ? <div className="muted">Run ID: {runId}</div> : null}
+          <button className="button" type="submit" disabled={submitting}>{submitting ? "Agents running…" : "Start agents"}</button>
         </form>
       </section>
     </main>

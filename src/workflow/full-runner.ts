@@ -42,33 +42,40 @@ export class FullRunExecutor {
       masterGoal,
       ["Master goal implemented, tested, reviewed, deployed and live-verified"],
     );
-
     await this.runtime.transition(run.id, item.id, "planning");
-    let current = await this.require(run.id, item.id);
+    return this.executeExisting(run.id, item.id);
+  }
+
+  async executeExisting(runId: string, itemId: string): Promise<FullRunResult> {
+    let current = await this.require(runId, itemId);
+    if (current.item.state !== "planning") {
+      throw new Error(`Existing full run must be in planning state, got ${current.item.state}`);
+    }
+
     const planResult = await this.architect.execute({ run: current.run, workItem: current.item, priorEvidence: current.item.evidence });
     current.item.evidence.push(...planResult.evidence);
     current.item.attempt += 1;
     await this.persist(current.run);
     if (planResult.blocker || !planResult.evidence.some((evidence) => evidence.kind === "plan")) {
-      await this.runtime.transition(run.id, item.id, "blocked");
-      return this.finish(run.id, item.id, "blocked");
+      await this.runtime.transition(runId, itemId, "blocked");
+      return this.finish(runId, itemId, "blocked");
     }
 
-    await this.runtime.transition(run.id, item.id, "ready");
-    await this.runtime.transition(run.id, item.id, "implementing");
-    current = await this.require(run.id, item.id);
+    await this.runtime.transition(runId, itemId, "ready");
+    await this.runtime.transition(runId, itemId, "implementing");
+    current = await this.require(runId, itemId);
 
     const gatedResult = await this.gated.execute(current.run, current.item);
     await this.persist(current.run);
     if (gatedResult.outcome !== "qa_passed") {
-      await this.runtime.transition(run.id, item.id, "blocked");
-      return this.finish(run.id, item.id, gatedResult.outcome === "developer_blocked" ? "blocked" : "failed");
+      await this.runtime.transition(runId, itemId, "blocked");
+      return this.finish(runId, itemId, gatedResult.outcome === "developer_blocked" ? "blocked" : "failed");
     }
 
-    await this.runtime.transition(run.id, item.id, "review");
-    await this.runtime.transition(run.id, item.id, "qa");
-    await this.runtime.transition(run.id, item.id, "deploying");
-    current = await this.require(run.id, item.id);
+    await this.runtime.transition(runId, itemId, "review");
+    await this.runtime.transition(runId, itemId, "qa");
+    await this.runtime.transition(runId, itemId, "deploying");
+    current = await this.require(runId, itemId);
 
     try {
       const deploymentEvidence = await this.deploymentGate.run(current.run, current.item);
@@ -81,24 +88,24 @@ export class FullRunExecutor {
         createdAt: new Date().toISOString(),
       });
       await this.persist(current.run);
-      await this.runtime.transition(run.id, item.id, "failed");
-      return this.finish(run.id, item.id, "failed");
+      await this.runtime.transition(runId, itemId, "failed");
+      return this.finish(runId, itemId, "failed");
     }
 
-    await this.runtime.transition(run.id, item.id, "live_verification");
-    current = await this.require(run.id, item.id);
+    await this.runtime.transition(runId, itemId, "live_verification");
+    current = await this.require(runId, itemId);
     const liveResult = await this.liveVerifier.execute({ run: current.run, workItem: current.item, priorEvidence: current.item.evidence });
     current.item.evidence.push(...liveResult.evidence);
     current.item.attempt += 1;
     await this.persist(current.run);
 
     if (liveResult.blocker || !liveResult.evidence.some((evidence) => evidence.kind === "live_check")) {
-      await this.runtime.transition(run.id, item.id, "blocked");
-      return this.finish(run.id, item.id, "blocked");
+      await this.runtime.transition(runId, itemId, "blocked");
+      return this.finish(runId, itemId, "blocked");
     }
 
-    await this.runtime.transition(run.id, item.id, "done");
-    return this.finish(run.id, item.id, "done");
+    await this.runtime.transition(runId, itemId, "done");
+    return this.finish(runId, itemId, "done");
   }
 
   private async require(runId: string, itemId: string): Promise<{ run: ProjectRun; item: WorkItem }> {
