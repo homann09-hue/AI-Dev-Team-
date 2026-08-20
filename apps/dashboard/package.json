@@ -4,7 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "build:core": "npm --prefix ../.. run build",
+    "prebuild": "npm run build:core",
     "build": "next build",
+    "pretypecheck": "npm run build:core",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
