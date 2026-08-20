@@ -12,7 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,8 +22,20 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies
+      - name: Install core dependencies
         run: npm install
 
-      - name: Typecheck, build and test
+      - name: Typecheck, build and test core
         run: npm run ci
+
+      - name: Install dashboard dependencies
+        working-directory: apps/dashboard
+        run: npm install
+
+      - name: Typecheck dashboard
+        working-directory: apps/dashboard
+        run: npm run typecheck
+
+      - name: Build dashboard
+        working-directory: apps/dashboard
+        run: npm run build
