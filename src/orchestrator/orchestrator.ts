@@ -19,7 +19,13 @@ export class Orchestrator {
 
   transition(item: WorkItem, next: WorkState): WorkItem {
     assertTransition(item.state, next);
-    return { ...item, state: next, owner: roleForState[next] };
+    const owner = roleForState[next];
+    const transitioned: WorkItem = { ...item, state: next };
+
+    if (owner) transitioned.owner = owner;
+    else delete transitioned.owner;
+
+    return transitioned;
   }
 
   async executeCurrent(run: ProjectRun, item: WorkItem): Promise<AgentResult> {
