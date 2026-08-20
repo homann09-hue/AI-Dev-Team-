@@ -1,6 +1,6 @@
-import type { ProjectRun } from "../../../../src/core/types.js";
-import { Runtime } from "../../../../src/runtime/runtime.js";
-import type { RunStore } from "../../../../src/storage/run-store.js";
+import type { ProjectRun } from "../../../../dist/src/core/types.js";
+import { Runtime } from "../../../../dist/src/runtime/runtime.js";
+import type { RunStore } from "../../../../dist/src/storage/run-store.js";
 
 class DashboardRunStore implements RunStore {
   private readonly runs = new Map<string, ProjectRun>();
