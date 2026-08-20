@@ -1,4 +1,5 @@
 import type { AgentAction } from "../actions/action.js";
+import { validateAgentAction } from "../actions/validate-action.js";
 
 export interface StructuredAgentOutput {
   summary: string;
@@ -24,6 +25,6 @@ export function parseStructuredAgentOutput(text: string): StructuredAgentOutput 
     summary: candidate.summary,
     ...(typeof candidate.approved === "boolean" ? { approved: candidate.approved } : {}),
     ...(typeof candidate.blocker === "string" ? { blocker: candidate.blocker } : {}),
-    actions: candidate.actions as AgentAction[],
+    actions: candidate.actions.map(validateAgentAction),
   };
 }
