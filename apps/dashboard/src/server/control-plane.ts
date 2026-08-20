@@ -1,8 +1,13 @@
 import type { ProjectRun } from "../../../../dist/src/core/types.js";
 import { Runtime } from "../../../../dist/src/runtime/runtime.js";
 import type { RunStore } from "../../../../dist/src/storage/run-store.js";
+import { supabaseRunStoreFromEnv, type SupabaseRunStore } from "../../../../dist/src/storage/supabase-run-store.js";
 
-class DashboardRunStore implements RunStore {
+interface DashboardStore extends RunStore {
+  list(): Promise<ProjectRun[]>;
+}
+
+class DashboardMemoryRunStore implements DashboardStore {
   private readonly runs = new Map<string, ProjectRun>();
 
   async get(runId: string): Promise<ProjectRun | undefined> {
@@ -21,12 +26,17 @@ class DashboardRunStore implements RunStore {
   }
 }
 
+const configuredSupabase = supabaseRunStoreFromEnv() as SupabaseRunStore | undefined;
+const persistenceMode = configuredSupabase ? "supabase" : "memory";
+
 const globalState = globalThis as typeof globalThis & {
-  __aiDevTeamRunStore?: DashboardRunStore;
+  __aiDevTeamRunStore?: DashboardStore;
   __aiDevTeamRuntime?: Runtime;
 };
 
-export const runStore = globalState.__aiDevTeamRunStore ?? new DashboardRunStore();
+export const runStore: DashboardStore = globalState.__aiDevTeamRunStore
+  ?? configuredSupabase
+  ?? new DashboardMemoryRunStore();
 export const runtime = globalState.__aiDevTeamRuntime ?? new Runtime(runStore, []);
 
 globalState.__aiDevTeamRunStore = runStore;
@@ -58,7 +68,7 @@ export async function getDashboardOverview() {
 
   return {
     generatedAt: new Date().toISOString(),
-    persistence: "memory" as const,
+    persistence: persistenceMode,
     activeRuns: activeRuns.length,
     totalRuns: runs.length,
     totalWorkItems,
