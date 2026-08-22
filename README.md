@@ -36,6 +36,7 @@ npm run worker:start
 The worker credential and explicit repository/live-URL allowlist are local files under `~/.ai-dev-team/` with mode `0600`. Pairing and rotation codes are single-use and expire after ten minutes. Rotation and immediate revocation are available in the dashboard.
 
 See [Local worker operations](docs/LOCAL_WORKER.md) for credential lifecycle, sandbox guarantees, QA coverage and delivery gates.
+The current control inventory and explicitly accepted exceptions are recorded in [Security posture](docs/SECURITY.md).
 
 ## Security boundary
 
