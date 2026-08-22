@@ -6,7 +6,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FAKEBIN="$TMP/bin"
 mkdir -p "$FAKEBIN"
-RECORD="$TMP/codex-args.txt"
+RECORD="$TMP/grok-args.txt"
 
 cat >"$FAKEBIN/claude" <<'EOF'
 #!/bin/bash
@@ -27,15 +27,15 @@ esac
 EOF
 chmod +x "$FAKEBIN/claude"
 
-cat >"$FAKEBIN/codex" <<'EOF'
+cat >"$FAKEBIN/grok" <<'EOF'
 #!/bin/bash
-printf '%s\n' "$*" >"$FAKE_CODEX_RECORD"
-printf '%s\n' '{"summary":"Codex read-only planner fallback: safe plan"}'
+printf '%s\n' "$*" >"$FAKE_GROK_RECORD"
+printf '%s\n' '{"summary":"Grok planner fallback: safe plan"}'
 EOF
-chmod +x "$FAKEBIN/codex"
+chmod +x "$FAKEBIN/grok"
 
 run_wrapper() {
-  PATH="$ROOT/scripts/bin:$FAKEBIN:/usr/bin:/bin" FAKE_CODEX_RECORD="$RECORD" FAKE_CLAUDE_MODE="$1" \
+  PATH="$ROOT/scripts/bin:$FAKEBIN:/usr/bin:/bin" FAKE_GROK_RECORD="$RECORD" FAKE_CLAUDE_MODE="$1" \
     "$ROOT/scripts/bin/claude" -p 'Return JSON only: {"summary":"plan"}' --output-format json --permission-mode plan
 }
 
@@ -46,10 +46,10 @@ grep -q 'claude plan' <<<"$SUCCESS_OUTPUT"
 
 rm -f "$RECORD"
 LIMIT_OUTPUT="$(run_wrapper limit 2>"$TMP/limit-stderr.txt")"
-grep -q 'Codex read-only planner fallback' <<<"$LIMIT_OUTPUT"
-grep -q -- '--sandbox read-only' "$RECORD"
+grep -q 'Grok planner fallback' <<<"$LIMIT_OUTPUT"
+grep -q '/plan ' "$RECORD"
 if grep -Eq -- 'workspace-write|--approve-for-me|--not-so-yolo' "$RECORD"; then
-  echo 'fallback Codex invocation was not read-only' >&2
+  echo 'fallback planner invocation was not isolated from developer-only flags' >&2
   exit 1
 fi
 grep -q 'Claude session limit detected' "$TMP/limit-stderr.txt"
