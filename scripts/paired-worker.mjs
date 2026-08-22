@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { assertRepositoryAllowed, loadWorkerConfig, normalizeRepository, safeGitArgs, sandboxArgs } from './lib/worker-security.mjs';
 
 const SUPABASE_URL = (process.env.AI_DEV_TEAM_SUPABASE_URL ?? 'https://lutbicxvaupjmmxgtkjn.supabase.co').replace(/\/$/, '');
 const SUPABASE_KEY = process.env.AI_DEV_TEAM_SUPABASE_PUBLISHABLE_KEY ?? 'sb_publishable_qXwHvaKvJR5JA1LQY0xp6Q_6Xeatyuo';
 const HOME = process.env.AI_DEV_TEAM_HOME ?? join(homedir(), '.ai-dev-team');
 const CREDENTIAL_FILE = process.env.AI_DEV_TEAM_WORKER_CREDENTIAL_FILE ?? join(HOME, 'worker-credential.json');
 const WORKSPACE_ROOT = process.env.AI_DEV_TEAM_WORKSPACE_ROOT ?? join(HOME, 'workspaces');
+const CONFIG_FILE = process.env.AI_DEV_TEAM_CONFIG_FILE ?? join(HOME, 'config.json');
+const SANDBOX_ENGINE = process.env.AI_DEV_TEAM_SANDBOX_ENGINE ?? 'docker';
+const SANDBOX_IMAGE = process.env.AI_DEV_TEAM_SANDBOX_IMAGE ?? 'node:22-bookworm-slim';
 const POLL_MS = Math.max(2000, Number(process.env.AI_DEV_TEAM_POLL_MS ?? 5000));
 let stopping = false;
 process.on('SIGINT', () => { stopping = true; });
@@ -40,7 +44,25 @@ async function run(command, args = [], options = {}) {
   });
 }
 async function checked(command, args = [], options = {}) { const result = await run(command, args, options); if (result.code !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.code}): ${truncate(result.stderr || result.stdout, 1500)}`); return result; }
-async function shell(command, cwd, timeoutMs = 20 * 60_000) { return run('/bin/zsh', ['-lc', command], { cwd, timeoutMs, maxOutput: 6_000_000 }); }
+function safeGit(workspace, args, options = {}) {
+  return run('git', safeGitArgs(workspace, args), {
+    ...options,
+    cwd: workspace.cwd,
+    env: { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', ...(options.env ?? {}) },
+  });
+}
+async function checkedGit(workspace, args, options = {}) {
+  const result = await safeGit(workspace, args, options);
+  if (result.code !== 0) throw new Error(`git ${args.join(' ')} failed (${result.code}): ${truncate(result.stderr || result.stdout, 1500)}`);
+  return result;
+}
+async function sandbox(command, cwd, options = {}) {
+  return run(SANDBOX_ENGINE, sandboxArgs({ cwd, image: SANDBOX_IMAGE, command, network: options.network === true }), {
+    timeoutMs: options.timeoutMs ?? 20 * 60_000,
+    maxOutput: 6_000_000,
+    env: { PATH: process.env.PATH },
+  });
+}
 
 function nestedText(value) {
   if (typeof value === 'string') return value;
@@ -101,19 +123,28 @@ function evidence(runRecord, kind, summary, uri) { const entry = { kind, summary
 async function stage(client, runRecord, state) { currentItem(runRecord).state = state; await client.saveRun(runRecord); }
 function context(runRecord) { const item = currentItem(runRecord); const recent = item.evidence.slice(-12).map((entry) => `- [${entry.kind}] ${truncate(entry.summary, 1000)}`).join('\n') || '- none'; return `Repository: ${runRecord.repository}\nMaster goal: ${runRecord.masterGoal}\nWork item: ${item.title}\nAcceptance criteria:\n${item.acceptanceCriteria.map((v) => `- ${v}`).join('\n')}\nPrior evidence:\n${recent}`; }
 
-async function prepareWorkspace(repository, runId) {
-  if (!/^[-_.A-Za-z0-9]+\/[-_.A-Za-z0-9]+$/.test(repository)) throw new Error('Invalid repository owner/name');
-  const cwd = join(WORKSPACE_ROOT, repository.replace('/', '__'), runId); await mkdir(dirname(cwd), { recursive: true, mode: 0o700 });
-  if (!(await exists(join(cwd, '.git')))) { const clone = await run('gh', ['repo', 'clone', repository, cwd, '--', '--depth=1'], { timeoutMs: 180000 }); if (clone.code !== 0) await checked('git', ['clone', '--depth=1', `https://github.com/${repository}.git`, cwd], { timeoutMs: 180000 }); }
-  await checked('git', ['fetch', 'origin', '--prune'], { cwd, timeoutMs: 120000 });
-  const view = await run('gh', ['repo', 'view', repository, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { cwd, timeoutMs: 30000 });
+async function prepareWorkspace(repository, runId, attempt) {
+  const normalized = normalizeRepository(repository);
+  const config = await loadWorkerConfig(CONFIG_FILE);
+  assertRepositoryAllowed(normalized, config);
+  const parent = join(WORKSPACE_ROOT, normalized.replace('/', '__'), runId); await mkdir(parent, { recursive: true, mode: 0o700 });
+  const cwd = await mkdtemp(join(parent, 'attempt-'));
+  const gitDir = `${cwd}.gitdir`;
+  const cloneArgs = ['--depth=1', `--separate-git-dir=${gitDir}`];
+  const clone = await run('gh', ['repo', 'clone', normalized, cwd, '--', ...cloneArgs], { timeoutMs: 180000 });
+  if (clone.code !== 0) await checked('git', ['clone', ...cloneArgs, `https://github.com/${normalized}.git`, cwd], { timeoutMs: 180000 });
+  const workspace = { cwd, gitDir };
+  await checkedGit(workspace, ['fetch', 'origin', '--prune'], { timeoutMs: 120000 });
+  const clean = await checkedGit(workspace, ['status', '--porcelain']);
+  if (clean.stdout.trim()) throw new Error('Fresh workspace is unexpectedly dirty; refusing to continue');
+  const view = await run('gh', ['repo', 'view', normalized, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { cwd, timeoutMs: 30000 });
   let defaultBranch = view.code === 0 ? view.stdout.trim() : 'main'; if (!defaultBranch) defaultBranch = 'main';
-  const branch = `ai-dev-team/${runId.replace(/[^A-Za-z0-9-]/g, '').slice(0, 12)}`;
-  const local = await run('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { cwd });
-  if (local.code === 0) await checked('git', ['checkout', branch], { cwd }); else await checked('git', ['checkout', '-B', branch, `origin/${defaultBranch}`], { cwd });
-  if (!(await run('git', ['config', 'user.name'], { cwd })).stdout.trim()) await checked('git', ['config', 'user.name', 'AI Dev Team Worker'], { cwd });
-  if (!(await run('git', ['config', 'user.email'], { cwd })).stdout.trim()) await checked('git', ['config', 'user.email', 'ai-dev-team@localhost'], { cwd });
-  return { cwd, branch, defaultBranch, repository };
+  const branch = `ai-dev-team/${runId.replace(/[^A-Za-z0-9-]/g, '').slice(0, 12)}-a${Math.max(1, Number(attempt) || 1)}`;
+  const local = await safeGit(workspace, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+  if (local.code === 0) await checkedGit(workspace, ['checkout', branch]); else await checkedGit(workspace, ['checkout', '-B', branch, `origin/${defaultBranch}`]);
+  await checkedGit(workspace, ['config', 'user.name', 'AI Dev Team Worker']);
+  await checkedGit(workspace, ['config', 'user.email', 'ai-dev-team@localhost']);
+  return { ...workspace, branch, defaultBranch, repository: normalized };
 }
 
 async function claudePlan(runRecord, cwd) {
@@ -128,44 +159,46 @@ async function codexImplement(runRecord, cwd) {
   if (result.code !== 0) throw new Error(`Codex developer failed (${result.code}): ${truncate(result.stderr || result.stdout, 1500)}`);
   return parseDecision(result.stdout);
 }
-async function deterministicGate(runRecord, cwd) {
+async function deterministicGate(runRecord, workspace) {
+  const { cwd } = workspace;
   const manifestPath = join(cwd, 'package.json');
-  if (!(await exists(manifestPath))) { await checked('git', ['diff', '--check'], { cwd }); evidence(runRecord, 'test', 'git diff --check passed.'); return; }
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); const lock = await exists(join(cwd, 'package-lock.json')) ? 'npm ci' : 'npm install';
-  const install = await shell(lock, cwd, 15 * 60_000); if (install.code !== 0) throw new Error(`Dependency install failed: ${truncate(install.stderr || install.stdout, 2000)}`);
+  if (!(await exists(manifestPath))) { await checkedGit(workspace, ['diff', '--check']); evidence(runRecord, 'test', 'git diff --check passed.'); return; }
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); const installCommand = await exists(join(cwd, 'package-lock.json')) ? ['npm', 'ci', '--ignore-scripts'] : ['npm', 'install', '--ignore-scripts'];
+  const install = await sandbox(installCommand, cwd, { network: true, timeoutMs: 15 * 60_000 }); if (install.code !== 0) throw new Error(`Sandboxed dependency install failed: ${truncate(install.stderr || install.stdout, 2000)}`);
   const selected = ['typecheck', 'test', 'build'].filter((name) => typeof (manifest.scripts ?? {})[name] === 'string');
-  for (const name of selected) { const result = await shell(`npm run ${name}`, cwd, 20 * 60_000); evidence(runRecord, 'test', `${name}: exit ${result.code}\n${truncate(result.stdout || result.stderr, 5000)}`); if (result.code !== 0) throw new Error(`Deterministic gate failed at npm run ${name}`); }
-  if (selected.length === 0) evidence(runRecord, 'test', `${lock} passed; no typecheck/test/build scripts.`);
+  for (const name of selected) { const result = await sandbox(['npm', 'run', name], cwd); evidence(runRecord, 'test', `${name}: exit ${result.code}\n${truncate(result.stdout || result.stderr, 5000)}`); if (result.code !== 0) throw new Error(`Deterministic gate failed at npm run ${name}`); }
+  if (selected.length === 0) evidence(runRecord, 'test', `${installCommand.join(' ')} passed in sandbox; no typecheck/test/build scripts.`);
 }
-async function grokReview(runRecord, cwd) {
-  const diff = await checked('git', ['diff', '--no-ext-diff', '--binary', 'HEAD'], { cwd, maxOutput: 3_000_000 });
-  const status = await checked('git', ['status', '--short'], { cwd });
+async function grokReview(runRecord, workspace) {
+  const { cwd } = workspace;
+  const diff = await checkedGit(workspace, ['diff', '--no-ext-diff', '--binary', 'HEAD'], { maxOutput: 3_000_000 });
+  const status = await checkedGit(workspace, ['status', '--short']);
   const prompt = `${context(runRecord)}\n\nAct as an independent read-only reviewer. Review correctness, regressions, security and goal coverage. Do not edit.\nGit status:\n${truncate(status.stdout, 3000)}\nDiff:\n${truncate(diff.stdout, 50000)}\nReturn JSON only: {"summary":"review findings","approved":true|false,"blocker":"required when rejected"}.`;
-  const result = await run('grok', ['-p', prompt, '--output-format', 'json'], { cwd, timeoutMs: 15 * 60_000, maxOutput: 2_000_000 });
+  const result = await run('grok', ['-p', prompt, '--output-format', 'json', '--permission-mode', 'plan', '--disable-web-search', '--no-subagents', '--max-turns', '1'], { cwd, timeoutMs: 15 * 60_000, maxOutput: 2_000_000 });
   if (result.code !== 0) throw new Error(`Grok reviewer failed (${result.code}): ${truncate(result.stderr || result.stdout, 1500)}`);
   return parseDecision(result.stdout, true);
 }
 async function deliver(runRecord, workspace) {
-  const { cwd, branch, defaultBranch, repository } = workspace; const status = await checked('git', ['status', '--porcelain'], { cwd }); if (!status.stdout.trim()) throw new Error('Developer produced no repository changes');
-  await checked('git', ['add', '--all'], { cwd }); const staged = await run('git', ['diff', '--cached', '--quiet'], { cwd });
-  if (staged.code === 1) await checked('git', ['commit', '-m', `AI Dev Team: ${runRecord.masterGoal.replace(/\s+/g, ' ').trim().slice(0,72) || 'implement master goal'}`], { cwd, timeoutMs: 120000 });
-  await checked('git', ['push', '--set-upstream', 'origin', branch], { cwd, timeoutMs: 180000 });
+  const { cwd, branch, defaultBranch, repository } = workspace; const status = await checkedGit(workspace, ['status', '--porcelain']); if (!status.stdout.trim()) throw new Error('Developer produced no repository changes');
+  await checkedGit(workspace, ['add', '--all']); const staged = await safeGit(workspace, ['diff', '--cached', '--quiet']);
+  if (staged.code === 1) await checkedGit(workspace, ['commit', '-m', `AI Dev Team: ${runRecord.masterGoal.replace(/\s+/g, ' ').trim().slice(0,72) || 'implement master goal'}`], { timeoutMs: 120000 });
+  await checkedGit(workspace, ['push', '--set-upstream', 'origin', branch], { timeoutMs: 180000 });
   let uri = `https://github.com/${repository}/tree/${encodeURIComponent(branch)}`;
   const existing = await run('gh', ['pr', 'view', branch, '--repo', repository, '--json', 'url', '--jq', '.url'], { cwd, timeoutMs: 30000 });
   if (existing.code === 0 && existing.stdout.trim()) uri = existing.stdout.trim(); else { const created = await run('gh', ['pr', 'create', '--repo', repository, '--head', branch, '--base', defaultBranch, '--title', `AI Dev Team: ${runRecord.id.slice(0,8)}`, '--body', 'Implemented by the personal local AI Dev Team worker.'], { cwd, timeoutMs: 60000 }); const found = created.stdout.trim().split(/\s+/).find((v) => v.startsWith('https://')); if (created.code === 0 && found) uri = found; }
   evidence(runRecord, 'deployment', `Committed and pushed ${branch}.`, uri); return uri;
 }
-async function verifyDelivery(runRecord, workspace, uri) { const remote = await run('git', ['ls-remote', '--exit-code', '--heads', 'origin', workspace.branch], { cwd: workspace.cwd, timeoutMs: 60000 }); if (remote.code !== 0) throw new Error(`Remote branch ${workspace.branch} could not be verified`); evidence(runRecord, 'live_check', `Remote GitHub delivery verified for ${workspace.branch}`, uri); }
+async function verifyDelivery(runRecord, workspace, uri) { const remote = await safeGit(workspace, ['ls-remote', '--exit-code', '--heads', 'origin', workspace.branch], { timeoutMs: 60000 }); if (remote.code !== 0) throw new Error(`Remote branch ${workspace.branch} could not be verified`); evidence(runRecord, 'live_check', `Remote GitHub delivery verified for ${workspace.branch}`, uri); }
 
 async function processJob(client, job) {
   let heartbeat;
   try {
     heartbeat = setInterval(() => { void client.heartbeat(job.id).catch((e) => console.error('[heartbeat]', e.message)); }, 25000); heartbeat.unref();
-    const runRecord = await client.getRun(job.run_id); if (!runRecord) throw new Error(`Run ${job.run_id} not found`); const item = currentItem(runRecord); const workspace = await prepareWorkspace(runRecord.repository, runRecord.id);
+    const runRecord = await client.getRun(job.run_id); if (!runRecord) throw new Error(`Run ${job.run_id} not found`); const item = currentItem(runRecord); const workspace = await prepareWorkspace(runRecord.repository, runRecord.id, job.attempt);
     console.log(`[${runRecord.id}] Claude architect`); await stage(client, runRecord, 'planning'); const plan = await claudePlan(runRecord, workspace.cwd); evidence(runRecord, 'plan', plan.summary); item.attempt += 1; await client.saveRun(runRecord); if (plan.blocker) throw new Error(`Architect blocked: ${plan.blocker}`);
     console.log(`[${runRecord.id}] Codex developer`); await stage(client, runRecord, 'implementing'); const implementation = await codexImplement(runRecord, workspace.cwd); evidence(runRecord, 'diff', implementation.summary); item.attempt += 1; await client.saveRun(runRecord); if (implementation.blocker) throw new Error(`Developer blocked: ${implementation.blocker}`);
-    console.log(`[${runRecord.id}] Deterministic QA`); await stage(client, runRecord, 'review'); await deterministicGate(runRecord, workspace.cwd); await client.saveRun(runRecord);
-    console.log(`[${runRecord.id}] Grok reviewer`); const review = await grokReview(runRecord, workspace.cwd); evidence(runRecord, 'review', review.summary); await client.saveRun(runRecord); if (review.approved !== true) throw new Error(`Review rejected: ${review.blocker ?? review.summary}`);
+    console.log(`[${runRecord.id}] Deterministic QA`); await stage(client, runRecord, 'review'); await deterministicGate(runRecord, workspace); await client.saveRun(runRecord);
+    console.log(`[${runRecord.id}] Grok reviewer`); const review = await grokReview(runRecord, workspace); evidence(runRecord, 'review', review.summary); await client.saveRun(runRecord); if (review.approved !== true) throw new Error(`Review rejected: ${review.blocker ?? review.summary}`);
     await stage(client, runRecord, 'qa'); evidence(runRecord, 'decision', 'Deterministic tests and Grok review passed.'); await client.saveRun(runRecord);
     console.log(`[${runRecord.id}] GitHub delivery`); await stage(client, runRecord, 'deploying'); const uri = await deliver(runRecord, workspace); await client.saveRun(runRecord);
     await stage(client, runRecord, 'live_verification'); await verifyDelivery(runRecord, workspace, uri); item.state = 'done'; runRecord.status = 'completed'; await client.saveRun(runRecord); await client.finish(job.id, 'completed'); console.log(`[${runRecord.id}] completed: ${uri}`);
@@ -181,9 +214,36 @@ async function pair(code) {
   await rpc('pair_local_worker', { p_code: normalized, p_worker_id: credential.worker_id, p_worker_token: credential.token });
   await saveCredential(credential); console.log(`Worker paired as ${credential.worker_id}. Credential stored locally with mode 0600.`);
 }
+async function saveWorkerConfig(config) {
+  await mkdir(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
+  const temp = `${CONFIG_FILE}.${process.pid}.tmp`;
+  await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  await rename(temp, CONFIG_FILE);
+}
+async function repositoryAllow(repository) {
+  const normalized = normalizeRepository(repository);
+  let config = { version: 1, allowedRepositories: [] };
+  try { config = await loadWorkerConfig(CONFIG_FILE); } catch (error) { if (!String(error.message).includes('not found')) throw error; }
+  config.allowedRepositories = [...new Set([...config.allowedRepositories, normalized])].sort();
+  await saveWorkerConfig(config);
+  console.log(`Allowed repository on this Mac: ${normalized}`);
+}
+async function repositoryRevoke(repository) {
+  const normalized = normalizeRepository(repository);
+  const config = await loadWorkerConfig(CONFIG_FILE);
+  config.allowedRepositories = config.allowedRepositories.filter((value) => value !== normalized);
+  await saveWorkerConfig(config);
+  console.log(`Revoked repository on this Mac: ${normalized}`);
+}
+async function repositoryList() {
+  const config = await loadWorkerConfig(CONFIG_FILE);
+  if (config.allowedRepositories.length === 0) console.log('No repositories are locally allowed.');
+  else config.allowedRepositories.forEach((repository) => console.log(repository));
+}
 async function doctor() {
-  const checks = [['node',['--version']],['git',['--version']],['gh',['auth','status']],['codex',['--version']],['codex',['login','status']],['claude',['--version']],['grok',['--version']]]; let failed = false;
+  const checks = [['node',['--version']],['git',['--version']],['gh',['auth','status']],['codex',['--version']],['codex',['login','status']],['claude',['--version']],['grok',['--version']],[SANDBOX_ENGINE,['version']]]; let failed = false;
   for (const [command,args] of checks) { const result = await run(command,args,{timeoutMs:20000}); const ok = result.code === 0; console.log(`${ok?'OK ':'ERR'} ${command} ${args.join(' ')} — ${truncate(result.stdout || result.stderr, 240)}`); if (!ok) failed = true; }
+  try { const config = await loadWorkerConfig(CONFIG_FILE); console.log(`OK  Local repository allowlist — ${config.allowedRepositories.length} repository/repositories`); } catch (e) { console.log(`ERR Local repository allowlist — ${e.message}`); failed = true; }
   try { const credential = await loadCredential(); const client = new PairedClient(credential); await client.touch(); console.log(`OK  Supabase pairing — ${credential.worker_id}`); } catch (e) { console.log(`ERR Supabase pairing — ${e.message}`); failed = true; }
   if (failed) process.exitCode = 1;
 }
@@ -191,5 +251,5 @@ async function once() { const client = new PairedClient(await loadCredential());
 async function start() { const credential = await loadCredential(); const client = new PairedClient(credential); await client.touch(); console.log(`Worker ${credential.worker_id} started.`); while (!stopping) { await client.touch(); const job = await client.claim(); if (job) { console.log(`Claimed job ${job.id} for run ${job.run_id}`); await processJob(client, job); } else await sleep(POLL_MS); } console.log('Worker stopped.'); }
 
 const [command='doctor', argument] = process.argv.slice(2);
-const tasks = { pair: () => pair(argument), doctor, once, start };
-if (!tasks[command]) { console.error('Commands: pair <code> | doctor | once | start'); process.exitCode = 1; } else tasks[command]().catch((e) => { console.error(e instanceof Error ? e.message : e); process.exitCode = 1; });
+const tasks = { pair: () => pair(argument), 'repo-allow': () => repositoryAllow(argument), 'repo-revoke': () => repositoryRevoke(argument), 'repo-list': repositoryList, doctor, once, start };
+if (!tasks[command]) { console.error('Commands: pair <code> | repo-allow <owner/repo> | repo-revoke <owner/repo> | repo-list | doctor | once | start'); process.exitCode = 1; } else tasks[command]().catch((e) => { console.error(e instanceof Error ? e.message : e); process.exitCode = 1; });
