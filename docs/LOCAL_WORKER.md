@@ -10,7 +10,7 @@ Install and start Docker Desktop, then pair the worker with the one-time code sh
 npm install
 npm run build
 npm run worker:pair -- 12CHARCODE
-npm run worker:repo:allow -- homann09-hue/AI-Dev-Team-
+npm run worker:repo:allow -- homann09-hue/AI-Dev-Team- https://your-live-dashboard.example/health
 npm run worker:doctor
 npm run worker:start
 ```
@@ -35,12 +35,12 @@ If the configured container engine is unavailable, the worker fails closed. Podm
 Cloud input cannot authorize access to GitHub. Each repository must also be explicitly allowed on the Mac:
 
 ```bash
-npm run worker:repo:allow -- owner/repository
+npm run worker:repo:allow -- owner/repository https://production.example/health
 npm run worker:repo:list
 npm run worker:repo:revoke -- owner/repository
 ```
 
-A missing, malformed or non-matching allowlist blocks the job before clone, checkout or agent execution.
+A missing, malformed or non-matching allowlist blocks the job before clone, checkout or agent execution. The HTTPS live URL is local policy: cloud input and repository content cannot redirect the worker's production probe.
 
 ## Clean attempts
 
@@ -50,10 +50,10 @@ Every queue attempt starts from a brand-new shallow clone and receives a unique 
 
 1. Claude creates a read-only implementation plan.
 2. Only Codex edits the dedicated checkout in its workspace-write sandbox.
-3. Deterministic QA runs in the hardened container boundary.
+3. Deterministic QA detects locked Node/Next.js, Python/uv, Go, Rust, Maven or locked Gradle projects and runs their native gates in the hardened container boundary. Unknown or unlocked projects are explicit blockers.
 4. Grok independently reviews the uncommitted diff without write permission.
 5. The worker commits, pushes an attempt-specific branch and creates a pull request.
-6. Delivery verification gates completion.
+6. A real pull request is mandatory. The worker waits for all GitHub Actions checks, requires a successful deployment status attached to the PR head, and then requires an HTTP 2xx response from the Mac-local live URL. Any missing or failed gate prevents completion.
 
 ## Optional environment variables
 

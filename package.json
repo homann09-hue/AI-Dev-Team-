@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:worker": "node --check scripts/paired-worker.mjs && node --test tests/worker-security.test.mjs && bash -n scripts/bin/codex",
+    "check:worker": "node --check scripts/paired-worker.mjs && node --test tests/*.test.mjs && bash -n scripts/bin/codex",
     "check:sandbox": "node scripts/sandbox-smoke.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "ci": "npm run typecheck && npm run check:worker && npm test",
