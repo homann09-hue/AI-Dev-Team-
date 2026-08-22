@@ -36,3 +36,11 @@ test('host Git operations use protected metadata and disable hooks', () => {
   assert.match(text, /core\.hooksPath=\/dev\/null/);
   assert.match(text, /core\.fsmonitor=false/);
 });
+
+test('sandbox subproject and cache environment stay explicit', () => {
+  const args = sandboxArgs({ cwd: '/tmp/workspace', workdir: 'apps/web', env: { GOCACHE: '/workspace/.cache/go' }, command: ['go', 'test', './...'] });
+  assert.match(args.join(' '), /--workdir \/workspace\/apps\/web/);
+  assert.match(args.join(' '), /--env GOCACHE=\/workspace\/\.cache\/go/);
+  assert.throws(() => sandboxArgs({ cwd: '/tmp/workspace', workdir: '../escape', command: ['true'] }), /inside the workspace/);
+  assert.throws(() => sandboxArgs({ cwd: '/tmp/workspace', env: { bad: 'value' }, command: ['true'] }), /Invalid sandbox environment/);
+});

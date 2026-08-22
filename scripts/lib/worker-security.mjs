@@ -25,8 +25,13 @@ export async function loadWorkerConfig(configFile) {
     throw new Error(`Invalid local worker config ${configFile}: allowedRepositories must be an array`);
   }
   return {
-    version: 1,
+    version: 2,
     allowedRepositories: [...new Set(parsed.allowedRepositories.map(normalizeRepository))].sort(),
+    liveVerification: Object.fromEntries(Object.entries(parsed.liveVerification ?? {}).map(([repository, settings]) => {
+      const normalized = normalizeRepository(repository);
+      if (!settings || typeof settings.url !== 'string') throw new Error(`Invalid live verification settings for ${normalized}`);
+      return [normalized, { url: settings.url }];
+    })),
   };
 }
 
@@ -38,13 +43,18 @@ export function assertRepositoryAllowed(repository, config) {
   return normalized;
 }
 
-export function sandboxArgs({ cwd, image = DEFAULT_SANDBOX_IMAGE, command, network = false, user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}` }) {
+export function sandboxArgs({ cwd, image = DEFAULT_SANDBOX_IMAGE, command, network = false, env = {}, workdir = '.', user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}` }) {
   if (!isAbsolute(cwd)) throw new Error('Sandbox workspace must be an absolute path');
   if (!Array.isArray(command) || command.length === 0 || command.some((part) => typeof part !== 'string' || !part)) {
     throw new Error('Sandbox command must be a non-empty argv array');
   }
   if (!/^\d+:\d+$/.test(user)) throw new Error('Sandbox user must be numeric uid:gid');
+  if (typeof workdir !== 'string' || workdir.startsWith('/') || workdir.split('/').includes('..')) throw new Error('Sandbox workdir must stay inside the workspace');
   const [uid, gid] = user.split(':');
+  const environment = Object.entries(env).flatMap(([key, value]) => {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key) || typeof value !== 'string' || /[\r\n\0]/.test(value)) throw new Error('Invalid sandbox environment entry');
+    return ['--env', `${key}=${value}`];
+  });
   return [
     'run', '--rm', '--init',
     '--network', network ? 'bridge' : 'none',
@@ -59,8 +69,9 @@ export function sandboxArgs({ cwd, image = DEFAULT_SANDBOX_IMAGE, command, netwo
     '--env', 'HOME=/home/worker',
     '--env', 'CI=true',
     '--env', 'NO_COLOR=1',
+    ...environment,
     '--volume', `${resolve(cwd)}:/workspace:rw`,
-    '--workdir', '/workspace',
+    '--workdir', workdir === '.' ? '/workspace' : `/workspace/${workdir}`,
     '--user', user,
     image,
     ...command,
