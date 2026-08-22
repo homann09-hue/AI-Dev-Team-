@@ -68,6 +68,6 @@ A branch push, preview URL, or green local build alone is not completion.
 - `src` — provider-independent orchestration/domain components.
 - `docs` — operating and architecture references.
 
-## Current deployment note
+## Production deployment
 
-The repository is configured with two legacy Vercel GitHub status integrations. Builds can be externally rate-limited; the worker correctly treats a missing or failed deployment as a blocker. Consolidate to one production Vercel project before declaring end-to-end live operation.
+`ai-dev-team-live` is the single Git-connected Vercel project. Production is accepted only through the exact-SHA deployment and live-health gates above; provider limits or failed previews remain blockers.
