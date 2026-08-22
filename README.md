@@ -1,86 +1,73 @@
 # AI Dev Team
 
-A provider-independent multi-agent development control plane for turning one master goal into planned, implemented, reviewed, tested, deployed and verified work.
+A single-user development control plane that turns one goal into planned, implemented, reviewed, tested, delivered and live-verified work.
 
-## Core workflow
+## Enforced workflow
 
-`GOAL -> PLAN -> IMPLEMENT -> REVIEW -> QA -> DEPLOY -> LIVE_VERIFY -> DONE`
+`GOAL → PLAN → IMPLEMENT → DETERMINISTIC_QA → REVIEW → PR → GITHUB_CI → DEPLOYMENT → LIVE_VERIFY → DONE`
 
-A failed gate returns the work item to the responsible agent with evidence. Only the developer role may mutate product code for an active work item; reviewer and QA roles are read-only by policy.
+Every gate records evidence and fails closed. A failed attempt starts from a fresh clone and an attempt-specific branch; uncommitted state is never reused.
 
-## Personal Mac worker
+## Fixed provider roles
 
-The personal mode uses the existing signed-in desktop subscriptions instead of model API keys:
+- **Claude Code** is the primary read-only architect.
+- **Grok** is the planning fallback only when Claude reports an explicit subscription session/rate limit, and is the independent read-only reviewer.
+- **Codex** is the only model allowed to write product code.
+- **Deterministic QA** runs repository checks in a disposable Docker/Podman container.
+- **GitHub Actions** and a successful deployment attached to the exact PR head SHA are hard gates.
 
-- Claude Code -> architecture / planning
-- Codex -> implementation
-- local deterministic tests -> QA gate
-- Grok Build -> independent review
-- GitHub CLI -> branch, push and pull request delivery
-- Supabase -> authenticated job queue, run state and worker presence
+Authentication, provider, or arbitrary Claude errors do not trigger fallback. Grok fallback is invoked in `/plan` mode and receives no write-capable Codex flags.
 
-No ChatGPT, Anthropic or xAI API key is required for this mode.
+## Local worker setup
 
-### First-time worker login
+The dashboard stores user-scoped jobs in Supabase. Provider CLIs use their existing local subscription sessions; model API keys are not stored in Supabase or Vercel.
 
-Update the repository, then request a Supabase login link:
-
-```bash
-cd ~/AI-Dev-Team-
-git switch main
-git pull --ff-only
-npm install
-npm run worker:login -- your@email.example
-```
-
-Supabase's default free email template sends a confirmation / magic link rather than a numeric OTP. When the terminal says `Magic link:`, **do not open the email link first**. Copy the complete hyperlink behind the email button/link and paste that URL into the terminal. The worker validates that the URL belongs to this Supabase project, consumes it itself, validates the resulting session and stores the refreshable session locally at `~/.ai-dev-team/session.json` with mode `0600`.
-
-A magic link is one-time-use. If it was already opened or expired, run `worker:login` again and use the fresh link.
-
-Then verify local dependencies and subscription logins:
+Install and start Docker Desktop, then use **Worker credentials → Pair new** in the dashboard:
 
 ```bash
+npm ci
+npm run build
+npm run worker:pair -- 16CHARCODE
+npm run worker:repo:allow -- homann09-hue/AI-Dev-Team- https://production.example/api/health
 npm run worker:doctor
-```
-
-Start the worker:
-
-```bash
 npm run worker:start
 ```
 
-The Mac must remain online while jobs are being executed. Queued jobs stay in Supabase when the worker is offline.
+The worker credential and explicit repository/live-URL allowlist are local files under `~/.ai-dev-team/` with mode `0600`. Pairing and rotation codes are single-use and expire after ten minutes. Rotation and immediate revocation are available in the dashboard.
 
-## Initial roles
+See [Local worker operations](docs/LOCAL_WORKER.md) for credential lifecycle, sandbox guarantees, QA coverage and delivery gates.
 
-- Lead / Orchestrator — decomposes the master goal and owns state transitions.
-- Architect — defines solution constraints, acceptance criteria and Definition of Done.
-- Developer — implements exactly one approved work item.
-- Reviewer — independently reviews changes and rejects defects.
-- QA — executes automated and integration gates.
-- Live Verifier — validates the deployed behavior before completion.
+## Security boundary
 
-## Design principles
+Repository content and model output are untrusted. Repository-defined install/build/test commands never run directly on macOS. They run with a read-only root filesystem, dropped capabilities, no host credentials or sockets, bounded CPU/memory/PIDs, and no network during check execution. Dependency installation uses the network only inside the disposable container and ignores npm lifecycle scripts.
 
-- One master goal from the operator.
-- One active implementation unit at a time by default.
-- Provider-independent model adapters.
-- Explicit state machine; no implicit agent hand-offs.
-- Evidence-backed gates before progression.
-- Git branches/PRs isolate changes.
-- Full audit trail for prompts, outputs, decisions, tests and costs.
-- Human approval gates remain available for destructive or high-risk actions.
+Git metadata is stored outside the model-writable checkout. Hooks and global/system Git configuration are disabled. A locally configured repository allowlist is checked before cloning or invoking any model.
+
+Supported deterministic QA includes locked npm/pnpm/yarn projects and Next.js, Python/uv, Go, Rust, Maven and locked Gradle projects. Unknown or unlocked project types fail closed.
+
+## Delivery invariant
+
+Completion requires all of the following for the exact pushed commit:
+
+1. A real pull request with the expected head and base.
+2. Every GitHub Actions workflow completed successfully.
+3. A successful GitHub deployment object for the exact head SHA with an environment URL.
+4. The deployment host matches the Mac-local live policy.
+5. The configured health path returns HTTP 2xx from the Mac.
+
+A branch push, preview URL, or green local build alone is not completion.
 
 ## Repository layout
 
-- `src/core` — domain model and state machine.
-- `src/agents` — agent role contracts.
-- `src/providers` — LLM provider abstraction.
-- `src/orchestrator` — workflow coordinator.
-- `scripts/personal-worker.mjs` — personal Mac subscription worker.
-- `supabase/migrations` — persistent run and worker queue schema.
-- `docs` — architecture and operating rules.
+- `scripts/paired-worker.mjs` — active local subscription worker.
+- `scripts/lib/worker-security.mjs` — local allowlist, protected Git and container boundary.
+- `scripts/lib/qa-policy.mjs` — language/framework QA detection.
+- `scripts/lib/delivery-gates.mjs` — PR, CI, deployment and live gates.
+- `apps/dashboard` — authenticated command center and credential management.
+- `supabase/migrations` — user-scoped queue and hardened worker credentials.
+- `src` — provider-independent orchestration/domain components.
+- `docs` — operating and architecture references.
 
-## Status
+## Current deployment note
 
-Personal Mac subscription worker is the active execution path for single-user operation.
+The repository is configured with two legacy Vercel GitHub status integrations. Builds can be externally rate-limited; the worker correctly treats a missing or failed deployment as a blocker. Consolidate to one production Vercel project before declaring end-to-end live operation.
