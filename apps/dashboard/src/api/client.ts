@@ -18,7 +18,7 @@ export interface DashboardJob {
   workerId?: string | null;
   attempt: number;
   lastError?: string | null;
-  heartbeatAt?: string | null;
+  heartbeatAt?: string;
   updatedAt: string;
 }
 
