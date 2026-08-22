@@ -57,7 +57,7 @@ fi
 
 FALLBACK_PROMPT="${PROMPT}
 
-Claude is temporarily unavailable because its subscription session limit was reached. You are the emergency ARCHITECT fallback only. Remain strictly read-only: do not edit, write, delete, commit, push, or change repository files. Inspect and plan only. In the JSON summary, begin with 'Codex read-only planner fallback: ' so the orchestration evidence is explicit."
+Claude is temporarily unavailable because its subscription session limit was reached. You are the emergency ARCHITECT fallback only. Stay in planning mode and do not implement changes. Inspect the repository, produce the requested architecture/implementation plan, and return JSON only. In the JSON summary, begin with 'Grok planner fallback: ' so the orchestration evidence is explicit."
 
-printf '%s\n' '[worker] Claude session limit detected; using Codex read-only planner fallback.' >&2
-exec codex exec --ephemeral --sandbox read-only -C "$PWD" "$FALLBACK_PROMPT"
+printf '%s\n' '[worker] Claude session limit detected; using Grok plan-mode fallback.' >&2
+exec grok -p "/plan ${FALLBACK_PROMPT}" --output-format json
