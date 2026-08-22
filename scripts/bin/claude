@@ -1,0 +1,65 @@
+#!/bin/bash
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLEAN_PATH=""
+IFS=':' read -r -a PATH_PARTS <<< "${PATH:-}"
+for PART in "${PATH_PARTS[@]}"; do
+  [[ "$PART" == "$SELF_DIR" ]] && continue
+  if [[ -z "$CLEAN_PATH" ]]; then CLEAN_PATH="$PART"; else CLEAN_PATH="$CLEAN_PATH:$PART"; fi
+done
+export PATH="$CLEAN_PATH"
+
+REAL_CLAUDE="$(command -v claude || true)"
+if [[ -z "$REAL_CLAUDE" ]]; then
+  printf '%s\n' 'Claude CLI not found outside the worker shim directory.' >&2
+  exit 127
+fi
+
+STDOUT_FILE="$(mktemp)"
+STDERR_FILE="$(mktemp)"
+cleanup() { rm -f "$STDOUT_FILE" "$STDERR_FILE"; }
+trap cleanup EXIT
+
+"$REAL_CLAUDE" "$@" >"$STDOUT_FILE" 2>"$STDERR_FILE"
+STATUS=$?
+
+if [[ $STATUS -eq 0 ]]; then
+  cat "$STDOUT_FILE"
+  cat "$STDERR_FILE" >&2
+  exit 0
+fi
+
+COMBINED="$(cat "$STDOUT_FILE"; cat "$STDERR_FILE")"
+if ! grep -Eqi 'session limit|api_error_status[^0-9]*429|rate.?limit|resets [0-9]{1,2}(:[0-9]{2})? ?(am|pm)?' <<<"$COMBINED"; then
+  cat "$STDOUT_FILE"
+  cat "$STDERR_FILE" >&2
+  exit "$STATUS"
+fi
+
+PROMPT=""
+EXPECT_PROMPT=false
+for ARG in "$@"; do
+  if [[ "$EXPECT_PROMPT" == "true" ]]; then
+    PROMPT="$ARG"
+    EXPECT_PROMPT=false
+    continue
+  fi
+  case "$ARG" in
+    -p|--print) EXPECT_PROMPT=true ;;
+    -p=*) PROMPT="${ARG#-p=}" ;;
+  esac
+done
+
+if [[ -z "$PROMPT" ]]; then
+  cat "$STDOUT_FILE"
+  cat "$STDERR_FILE" >&2
+  exit "$STATUS"
+fi
+
+FALLBACK_PROMPT="${PROMPT}
+
+Claude is temporarily unavailable because its subscription session limit was reached. You are the emergency ARCHITECT fallback only. Stay in planning mode and do not implement changes. Inspect the repository, produce the requested architecture/implementation plan, and return JSON only. In the JSON summary, begin with 'Grok planner fallback: ' so the orchestration evidence is explicit."
+
+printf '%s\n' '[worker] Claude session limit detected; using Grok plan-mode fallback.' >&2
+exec grok -p "/plan ${FALLBACK_PROMPT}" --output-format json

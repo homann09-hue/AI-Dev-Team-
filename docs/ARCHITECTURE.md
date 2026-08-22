@@ -1,46 +1,43 @@
-# Architecture v0.1
+# Architecture
 
-## Objective
+## Runtime
 
-The operator supplies one master goal. The control plane converts that goal into auditable work items and advances each item only when its current quality gate passes.
+The Next.js dashboard authenticates the operator with Supabase and creates user-scoped `agent_jobs`. A paired Mac worker claims jobs with a revocable, hashed bearer credential. Model sessions and repository access remain on that Mac.
 
-## Control plane
+```text
+Dashboard → Supabase Auth/RLS + Queue → Paired Mac worker
+                                         ├─ Claude: primary plan
+                                         ├─ Grok: limit-only plan fallback
+                                         ├─ Codex: sole code writer
+                                         ├─ containerized deterministic QA
+                                         ├─ Grok: independent review
+                                         └─ PR → GitHub CI → deployment → live probe
+```
 
-1. Lead accepts the master goal and repository target.
-2. Architect creates bounded work items, acceptance criteria and risk notes.
-3. Developer receives one ready work item and owns all product-code mutations for it.
-4. Reviewer independently evaluates the diff against objective and architecture.
-5. QA runs deterministic tests and records evidence.
-6. Deployment integration publishes an approved revision.
-7. Live Verifier checks the deployed product, not merely CI output.
-8. The item becomes `done` only after live verification passes.
+## Authority boundaries
 
-## Failure loops
+- Claude and Grok planning run read-only. Claude failures fall back only on explicit session/rate-limit evidence; other failures stop the job.
+- Codex is the only model with a writable checkout. It cannot access protected Git metadata.
+- Grok review receives status/diff evidence and has no mutation path.
+- Repository scripts execute only through the hardened container QA runner.
+- The dashboard can create one-time pairing/rotation codes and revoke workers, but cannot read token hashes.
 
-- Review rejection -> implementing.
-- QA failure -> implementing.
-- Live verification failure -> implementing.
-- External dependency -> blocked with evidence and an explicit unblock condition.
-- Invalid state changes are rejected by the state machine.
+## Workspace invariant
 
-## Provider isolation
+Each attempt creates a new shallow clone and a unique branch. Git metadata is placed beside, not inside, the model-writable checkout. Host Git operations disable hooks and global/system configuration. QA runs against a separate copy, so build artifacts cannot enter the developer diff. Any unexpected dirty state before work fails the attempt.
 
-Agent behavior depends on the `ModelProvider` interface rather than a provider SDK. OpenAI, Anthropic, Google and local-model adapters can therefore be selected per role without changing orchestration semantics.
+## Persistence and credential lifecycle
 
-## Safety model
+Supabase stores RLS-scoped runs, jobs and worker presence. Worker credentials store SHA-256 token hashes only. Pairing/rotation codes are 64-bit random, single-use and expire after ten minutes. Invalid bearer attempts and worker operations are rate-limited; audit events are private. Revocation immediately invalidates the token, removes presence and requeues a claimed job.
 
-The orchestrator separates reasoning authority from mutation authority. Reviewer and QA agents cannot mutate product code. Repository writes, deployment and destructive operations must pass capability-specific policy gates. Secrets must remain in the runtime secret store and never enter prompts, logs or repository content.
+## Completion invariant
 
-## Planned persistence
+The worker creates and re-reads a pull request, checks its head/base/exact SHA, waits until all GitHub Actions workflows succeed, resolves a successful GitHub deployment for that exact SHA, validates the environment host against local policy, and performs an HTTP 2xx health probe. Any missing evidence blocks `done`.
 
-Runs, work items, evidence, model calls, token/cost usage, repository refs and deployment refs will be persisted behind storage interfaces. The first production adapter should use PostgreSQL.
+## Failure behavior
 
-## Planned integrations
-
-- GitHub App: repository reads, branches, commits, PRs, checks.
-- OpenAI adapter.
-- Anthropic adapter.
-- Google Gemini adapter.
-- Vercel deployment/status adapter.
-- Browser/live verification runner.
-- Web dashboard and operator approval queue.
+- Planning/provider failure: attempt fails with bounded evidence.
+- Deterministic QA or review rejection: no delivery occurs.
+- PR/CI/deployment/live failure: work does not complete.
+- Stale/revoked worker: running job is safely requeued.
+- Unknown framework or missing lockfile: deterministic QA fails closed.

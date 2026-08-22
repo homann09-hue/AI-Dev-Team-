@@ -1,12 +1,12 @@
 {
   "name": "ai-dev-team",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:worker": "node --check scripts/paired-worker.mjs && node --test tests/*.test.mjs && bash -n scripts/bin/codex",
+    "check:worker": "node --check scripts/paired-worker.mjs && node --test tests/*.test.mjs && bash -n scripts/bin/codex && bash -n scripts/bin/claude && bash -n scripts/test-provider-fallback.sh && bash scripts/test-provider-fallback.sh",
     "check:sandbox": "node scripts/sandbox-smoke.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "ci": "npm run typecheck && npm run check:worker && npm test",
