@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:worker": "node --check scripts/paired-worker.mjs && bash -n scripts/bin/codex && bash -n scripts/bin/claude",
+    "check:worker": "node --check scripts/paired-worker.mjs && bash -n scripts/bin/codex && bash -n scripts/bin/claude && bash -n scripts/test-provider-fallback.sh && bash scripts/test-provider-fallback.sh",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "ci": "npm run typecheck && npm run check:worker && npm test",
     "worker": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs",
