@@ -28,6 +28,14 @@ export interface WorkerPresence {
   details: Record<string, unknown>;
 }
 
+export interface WorkerCredentialStatus {
+  worker_id: string;
+  created_at: string;
+  last_seen_at: string;
+  revoked_at: string | null;
+  failed_auth_24h: number;
+}
+
 export async function authenticateRequest(request: Request): Promise<{ token: string; user: SupabaseUser }> {
   const authorization = request.headers.get("authorization") ?? "";
   const match = authorization.match(/^Bearer\s+(.+)$/i);
@@ -95,6 +103,26 @@ export class AuthenticatedSupabaseRunStore implements RunStore {
   async listWorkers(): Promise<WorkerPresence[]> {
     const query = new URLSearchParams({ user_id: `eq.${this.userId}`, select: "*", order: "last_seen_at.desc" });
     return this.request<WorkerPresence[]>(`/rest/v1/worker_presence?${query.toString()}`);
+  }
+
+  async listWorkerCredentials(): Promise<WorkerCredentialStatus[]> {
+    return this.rpc<WorkerCredentialStatus[]>("list_local_workers");
+  }
+
+  async createWorkerPairingCode(): Promise<string> {
+    return this.rpc<string>("create_worker_pairing_code");
+  }
+
+  async createWorkerRotationCode(workerId: string): Promise<string> {
+    return this.rpc<string>("create_worker_rotation_code", { p_worker_id: workerId });
+  }
+
+  async revokeWorker(workerId: string): Promise<boolean> {
+    return this.rpc<boolean>("revoke_local_worker", { p_worker_id: workerId });
+  }
+
+  private async rpc<T>(name: string, body: Record<string, unknown> = {}): Promise<T> {
+    return this.request<T>(`/rest/v1/rpc/${name}`, { method: "POST", body: JSON.stringify(body) });
   }
 
   private async request<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {

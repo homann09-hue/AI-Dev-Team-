@@ -110,12 +110,13 @@ async function loadCredential() {
 class PairedClient {
   constructor(credential) { this.credential = credential; }
   authArgs(extra = {}) { return { p_worker_id: this.credential.worker_id, p_worker_token: this.credential.token, ...extra }; }
-  async touch() { return rpc('worker_touch', this.authArgs({ p_details: { hostname: hostname(), pid: process.pid } })); }
+  async touch() { const ok = await rpc('worker_touch', this.authArgs({ p_details: { hostname: hostname(), pid: process.pid } })); if (ok !== true) throw new Error('Worker credential is invalid, revoked or rate-limited'); return true; }
   async claim() { const rows = await rpc('worker_claim_job', this.authArgs({ p_stale_after_seconds: 300 })); return Array.isArray(rows) ? rows[0] : undefined; }
-  async heartbeat(jobId) { return rpc('worker_heartbeat', this.authArgs({ p_job_id: jobId })); }
-  async finish(jobId, status, error) { return rpc('worker_finish_job', this.authArgs({ p_job_id: jobId, p_status: status, p_error: error ? truncate(error, 4000) : null })); }
+  async heartbeat(jobId) { const ok = await rpc('worker_heartbeat', this.authArgs({ p_job_id: jobId })); if (ok !== true) throw new Error('Worker heartbeat rejected'); return true; }
+  async finish(jobId, status, error) { const ok = await rpc('worker_finish_job', this.authArgs({ p_job_id: jobId, p_status: status, p_error: error ? truncate(error, 4000) : null })); if (ok !== true) throw new Error('Worker job completion rejected'); return true; }
   async getRun(runId) { return rpc('worker_get_run', this.authArgs({ p_run_id: runId })); }
-  async saveRun(runRecord) { runRecord.updatedAt = new Date().toISOString(); return rpc('worker_save_run', this.authArgs({ p_run_id: runRecord.id, p_payload: runRecord })); }
+  async saveRun(runRecord) { runRecord.updatedAt = new Date().toISOString(); const ok = await rpc('worker_save_run', this.authArgs({ p_run_id: runRecord.id, p_payload: runRecord })); if (ok !== true) throw new Error('Worker run update rejected'); return true; }
+  async rotate(code, newToken) { const ok = await rpc('rotate_local_worker', this.authArgs({ p_new_worker_token: newToken, p_code: code })); if (ok !== true) throw new Error('Worker credential rotation rejected'); return true; }
 }
 
 function currentItem(runRecord) { const item = runRecord?.workItems?.[0]; if (!item) throw new Error('Run has no work item'); return item; }
@@ -269,10 +270,19 @@ async function processJob(client, job) {
 }
 
 async function pair(code) {
-  const normalized = String(code ?? '').trim().toUpperCase(); if (!/^[A-F0-9]{12}$/.test(normalized)) throw new Error('Usage: npm run worker:pair -- 12CHARCODE');
+  const normalized = String(code ?? '').trim().toUpperCase(); if (!/^[A-F0-9]{16}$/.test(normalized)) throw new Error('Usage: npm run worker:pair -- 16CHARCODE');
   const credential = { worker_id: `${hostname()}-${randomUUID().slice(0,8)}`, token: randomBytes(32).toString('hex') };
-  await rpc('pair_local_worker', { p_code: normalized, p_worker_id: credential.worker_id, p_worker_token: credential.token });
+  const paired = await rpc('pair_local_worker', { p_code: normalized, p_worker_id: credential.worker_id, p_worker_token: credential.token });
+  if (paired !== true) throw new Error('Pairing code was invalid, expired or rate-limited');
   await saveCredential(credential); console.log(`Worker paired as ${credential.worker_id}. Credential stored locally with mode 0600.`);
+}
+async function rotate(code) {
+  const normalized = String(code ?? '').trim().toUpperCase(); if (!/^[A-F0-9]{16}$/.test(normalized)) throw new Error('Usage: npm run worker:rotate -- 16CHARCODE');
+  const credential = await loadCredential();
+  const next = { ...credential, token: randomBytes(32).toString('hex') };
+  await new PairedClient(credential).rotate(normalized, next.token);
+  await saveCredential(next);
+  console.log(`Worker credential rotated for ${next.worker_id}. The previous token is invalid.`);
 }
 async function saveWorkerConfig(config) {
   await mkdir(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
@@ -324,5 +334,5 @@ async function once() { const client = new PairedClient(await loadCredential());
 async function start() { const credential = await loadCredential(); const client = new PairedClient(credential); await client.touch(); console.log(`Worker ${credential.worker_id} started.`); while (!stopping) { await client.touch(); const job = await client.claim(); if (job) { console.log(`Claimed job ${job.id} for run ${job.run_id}`); await processJob(client, job); } else await sleep(POLL_MS); } console.log('Worker stopped.'); }
 
 const [command='doctor', argument, secondArgument] = process.argv.slice(2);
-const tasks = { pair: () => pair(argument), 'repo-allow': () => repositoryAllow(argument, secondArgument), 'repo-revoke': () => repositoryRevoke(argument), 'repo-list': repositoryList, doctor, once, start };
-if (!tasks[command]) { console.error('Commands: pair <code> | repo-allow <owner/repo> <https-live-url> | repo-revoke <owner/repo> | repo-list | doctor | once | start'); process.exitCode = 1; } else tasks[command]().catch((e) => { console.error(e instanceof Error ? e.message : e); process.exitCode = 1; });
+const tasks = { pair: () => pair(argument), rotate: () => rotate(argument), 'repo-allow': () => repositoryAllow(argument, secondArgument), 'repo-revoke': () => repositoryRevoke(argument), 'repo-list': repositoryList, doctor, once, start };
+if (!tasks[command]) { console.error('Commands: pair <code> | rotate <code> | repo-allow <owner/repo> <https-live-url> | repo-revoke <owner/repo> | repo-list | doctor | once | start'); process.exitCode = 1; } else tasks[command]().catch((e) => { console.error(e instanceof Error ? e.message : e); process.exitCode = 1; });
