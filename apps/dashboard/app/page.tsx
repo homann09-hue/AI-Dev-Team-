@@ -7,6 +7,7 @@ import {
   createProject,
   executeRun,
   getDashboard,
+  manageWorker,
   type DashboardEvidence,
   type DashboardOverview,
   type DashboardRun,
@@ -65,6 +66,8 @@ export default function DashboardPage() {
   const [ready, setReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [workerActionPending, setWorkerActionPending] = useState(false);
+  const [workerCommand, setWorkerCommand] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -167,6 +170,30 @@ export default function DashboardPage() {
     router.replace("/login");
   }
 
+  async function runWorkerAction(action: "pair" | "rotate" | "revoke", workerId?: string) {
+    if (action === "revoke" && !window.confirm(`Revoke ${workerId}? A running job will be requeued.`)) return;
+    setWorkerActionPending(true);
+    setError(null);
+    try {
+      const result = await manageWorker(action, workerId);
+      if (result.code) {
+        const command = result.action === "rotate"
+          ? `npm run worker:rotate -- ${result.code}`
+          : `npm run worker:pair -- ${result.code}`;
+        setWorkerCommand(command);
+        setActionStatus(`One-time ${result.action} code created. It expires in 10 minutes.`);
+      } else {
+        setWorkerCommand(null);
+        setActionStatus(`Worker ${workerId} revoked. Its credential is no longer valid.`);
+      }
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Worker action failed");
+    } finally {
+      setWorkerActionPending(false);
+    }
+  }
+
   if (!ready) return <main className="shell"><p className="muted">Checking session…</p></main>;
 
   return (
@@ -214,6 +241,29 @@ export default function DashboardPage() {
               </button>
               <p className="microcopy">The cloud stores the job and evidence. Model sessions stay on your Mac.</p>
             </form>
+          </article>
+
+          <article className="panel worker-security-panel">
+            <div className="panel-heading">
+              <div><span className="eyebrow">Local trust</span><h2>Worker credentials</h2></div>
+              <button className="secondary-button" disabled={workerActionPending} onClick={() => void runWorkerAction("pair")}>Pair new</button>
+            </div>
+            {workerCommand ? <div className="worker-command"><span>Run once on the Mac</span><code>{workerCommand}</code></div> : null}
+            <div className="credential-list">
+              {(overview?.worker.credentials ?? []).map((credential) => (
+                <div className={`credential-row ${credential.revokedAt ? "revoked" : ""}`} key={credential.workerId}>
+                  <div className="credential-copy">
+                    <strong>{credential.workerId}</strong>
+                    <span>{credential.revokedAt ? `Revoked ${relativeTime(credential.revokedAt)}` : `Seen ${relativeTime(credential.lastSeenAt)}`} · {credential.failedAuth24h} failed auth / 24h</span>
+                  </div>
+                  {!credential.revokedAt ? <div className="credential-actions">
+                    <button disabled={workerActionPending} onClick={() => void runWorkerAction("rotate", credential.workerId)}>Rotate</button>
+                    <button className="danger" disabled={workerActionPending} onClick={() => void runWorkerAction("revoke", credential.workerId)}>Revoke</button>
+                  </div> : null}
+                </div>
+              ))}
+              {!overview?.worker.credentials?.length ? <div className="empty-state">No paired worker credential.</div> : null}
+            </div>
           </article>
 
           <article className="panel history-panel">

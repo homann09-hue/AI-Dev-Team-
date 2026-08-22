@@ -46,11 +46,24 @@ export interface DashboardOverview {
   persistence: "supabase-rls";
   execution: "personal-mac-worker";
   user: { id: string; email?: string };
-  worker: { online: boolean; workerId?: string; lastSeenAt?: string };
+  worker: {
+    online: boolean;
+    workerId?: string;
+    lastSeenAt?: string;
+    credentials: Array<{ workerId: string; createdAt: string; lastSeenAt: string; revokedAt: string | null; failedAuth24h: number }>;
+  };
   activeRuns: number;
   totalRuns: number;
   totalWorkItems: number;
   runs: DashboardRun[];
+}
+
+export interface WorkerActionResponse {
+  action: "pair" | "rotate" | "revoke";
+  workerId?: string;
+  code?: string;
+  expiresInSeconds?: number;
+  revoked?: true;
 }
 
 export interface CreateProjectResponse {
@@ -96,4 +109,15 @@ export async function getDashboard(): Promise<DashboardOverview> {
   const body = (await response.json()) as DashboardOverview | { error?: string };
   if (!response.ok) throw new Error("error" in body && body.error ? body.error : "Dashboard unavailable");
   return body as DashboardOverview;
+}
+
+export async function manageWorker(action: "pair" | "rotate" | "revoke", workerId?: string): Promise<WorkerActionResponse> {
+  const response = await fetch("/api/workers", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ action, workerId }),
+  });
+  const body = await response.json() as WorkerActionResponse | { error?: string };
+  if (!response.ok) throw new Error("error" in body && body.error ? body.error : "Worker action failed");
+  return body as WorkerActionResponse;
 }

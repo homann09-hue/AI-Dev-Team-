@@ -9,13 +9,25 @@ Install and start Docker Desktop, then pair the worker with the one-time code sh
 ```bash
 npm install
 npm run build
-npm run worker:pair -- 12CHARCODE
+npm run worker:pair -- 16CHARCODE
 npm run worker:repo:allow -- homann09-hue/AI-Dev-Team- https://your-live-dashboard.example/health
 npm run worker:doctor
 npm run worker:start
 ```
 
 The worker credential and local repository allowlist are stored under `~/.ai-dev-team/` with file mode `0600`.
+
+Pairing codes are one-time, 64-bit random values and expire after 10 minutes. Generate them from **Worker credentials → Pair new** in the dashboard. The endpoint is rate-limited server-side.
+
+## Rotate or revoke a worker
+
+The dashboard never exposes the worker token. Use **Rotate** to create a 10-minute one-time rotation code, then run the displayed command on the paired Mac:
+
+```bash
+npm run worker:rotate -- 16CHARCODE
+```
+
+The new token is written atomically only after the server accepts it; the previous token becomes invalid immediately. **Revoke** invalidates the credential, removes its online presence and safely requeues any job it held. Failed credential attempts are rate-limited and counted per worker for the dashboard audit indicator.
 
 ## Security boundary
 

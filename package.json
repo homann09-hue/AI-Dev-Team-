@@ -12,6 +12,7 @@
     "ci": "npm run typecheck && npm run check:worker && npm test",
     "worker": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs",
     "worker:pair": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs pair",
+    "worker:rotate": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs rotate",
     "worker:repo:allow": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs repo-allow",
     "worker:repo:revoke": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs repo-revoke",
     "worker:repo:list": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs repo-list",

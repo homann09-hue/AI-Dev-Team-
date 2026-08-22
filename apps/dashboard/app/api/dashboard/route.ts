@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   try {
     const { token, user } = await authenticateRequest(request);
     const store = new AuthenticatedSupabaseRunStore(token, user.id);
-    const [runs, jobs, workers] = await Promise.all([store.list(), store.listJobs(), store.listWorkers()]);
+    const [runs, jobs, workers, credentials] = await Promise.all([store.list(), store.listJobs(), store.listWorkers(), store.listWorkerCredentials()]);
     const activeRuns = runs.filter((run) => run.status === "active");
     const totalWorkItems = runs.reduce((sum, run) => sum + run.workItems.length, 0);
     const jobsByRun = new Map(jobs.map((job) => [job.run_id, job]));
@@ -33,6 +33,13 @@ export async function GET(request: Request) {
         online: workerOnline,
         workerId: latestWorker?.worker_id ?? runningJob?.worker_id ?? undefined,
         lastSeenAt,
+        credentials: credentials.map((credential) => ({
+          workerId: credential.worker_id,
+          createdAt: credential.created_at,
+          lastSeenAt: credential.last_seen_at,
+          revokedAt: credential.revoked_at,
+          failedAuth24h: Number(credential.failed_auth_24h),
+        })),
       },
       activeRuns: activeRuns.length,
       totalRuns: runs.length,
