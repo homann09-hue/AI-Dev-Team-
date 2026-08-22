@@ -1,0 +1,43 @@
+#!/bin/bash
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLEAN_PATH=""
+IFS=':' read -r -a PATH_PARTS <<< "${PATH:-}"
+for PART in "${PATH_PARTS[@]}"; do
+  [[ "$PART" == "$SELF_DIR" ]] && continue
+  if [[ -z "$CLEAN_PATH" ]]; then CLEAN_PATH="$PART"; else CLEAN_PATH="$CLEAN_PATH:$PART"; fi
+done
+export PATH="$CLEAN_PATH"
+
+HAS_AUTO_REVIEW=false
+for ARG in "$@"; do
+  if [[ "$ARG" == "--approve-for-me" || "$ARG" == "--not-so-yolo" ]]; then
+    HAS_AUTO_REVIEW=true
+    break
+  fi
+done
+
+if [[ "$HAS_AUTO_REVIEW" == "true" ]]; then
+  FILTERED=()
+  SKIP_NEXT=false
+  for ARG in "$@"; do
+    if [[ "$SKIP_NEXT" == "true" ]]; then
+      SKIP_NEXT=false
+      continue
+    fi
+    case "$ARG" in
+      --sandbox)
+        SKIP_NEXT=true
+        ;;
+      --sandbox=*)
+        ;;
+      *)
+        FILTERED+=("$ARG")
+        ;;
+    esac
+  done
+  exec codex "${FILTERED[@]}"
+fi
+
+exec codex "$@"
