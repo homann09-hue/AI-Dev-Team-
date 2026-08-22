@@ -6,11 +6,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:worker": "node --check scripts/paired-worker.mjs && bash -n scripts/bin/codex",
+    "check:worker": "node --check scripts/paired-worker.mjs && node --test tests/worker-security.test.mjs && bash -n scripts/bin/codex",
+    "check:sandbox": "node scripts/sandbox-smoke.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "ci": "npm run typecheck && npm run check:worker && npm test",
     "worker": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs",
     "worker:pair": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs pair",
+    "worker:repo:allow": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs repo-allow",
+    "worker:repo:revoke": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs repo-revoke",
+    "worker:repo:list": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs repo-list",
     "worker:doctor": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs doctor",
     "worker:once": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs once",
     "worker:start": "PATH=\"$PWD/scripts/bin:$PATH\" node scripts/paired-worker.mjs start"

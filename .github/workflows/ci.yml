@@ -23,14 +23,17 @@ jobs:
           node-version: 22
 
       - name: Install core dependencies
-        run: npm install
+        run: npm ci
 
       - name: Typecheck, build and test core
         run: npm run ci
 
+      - name: Run deterministic QA in hardened container
+        run: npm run check:sandbox
+
       - name: Install dashboard dependencies
         working-directory: apps/dashboard
-        run: npm install
+        run: npm ci
 
       - name: Typecheck dashboard
         working-directory: apps/dashboard

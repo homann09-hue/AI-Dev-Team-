@@ -1,41 +1,68 @@
 # Personal Mac Worker
 
-The dashboard stores user-scoped jobs in Supabase. Codex, Claude Code and Grok Build run only on the user's Mac and use the existing subscription logins already present there. No model API key is stored in Vercel or Supabase.
+The dashboard stores user-scoped jobs in Supabase. Claude Code, Codex and Grok run only on the user's Mac with their existing subscription logins. No model API key is stored in Vercel or Supabase.
 
 ## First setup
+
+Install and start Docker Desktop, then pair the worker with the one-time code shown by the dashboard:
 
 ```bash
 npm install
 npm run build
-npm run worker:login -- your@email@example.com
+npm run worker:pair -- 12CHARCODE
+npm run worker:repo:allow -- homann09-hue/AI-Dev-Team-
 npm run worker:doctor
 npm run worker:start
 ```
 
-The email must be the same Supabase account used in the dashboard. The OTP login creates a local session at `~/.ai-dev-team/session.json` with file mode `0600`.
+The worker credential and local repository allowlist are stored under `~/.ai-dev-team/` with file mode `0600`.
+
+## Security boundary
+
+The worker treats every repository and generated change as untrusted. Repository-defined install, test, typecheck, lint and build commands never execute directly on macOS. They run in a disposable Docker or Podman container with:
+
+- no host credentials, Docker socket, SSH directory or user configuration mounts;
+- a read-only container filesystem and only the current attempt mounted read/write;
+- all Linux capabilities dropped and `no-new-privileges` enabled;
+- CPU, memory and process limits;
+- lifecycle scripts disabled during dependency installation;
+- networking disabled while repository-defined QA scripts execute.
+
+If the configured container engine is unavailable, the worker fails closed. Podman can be selected with `AI_DEV_TEAM_SANDBOX_ENGINE=podman`.
+
+## Local repository authorization
+
+Cloud input cannot authorize access to GitHub. Each repository must also be explicitly allowed on the Mac:
+
+```bash
+npm run worker:repo:allow -- owner/repository
+npm run worker:repo:list
+npm run worker:repo:revoke -- owner/repository
+```
+
+A missing, malformed or non-matching allowlist blocks the job before clone, checkout or agent execution.
+
+## Clean attempts
+
+Every queue attempt starts from a brand-new shallow clone and receives a unique `ai-dev-team/<run>-a<attempt>` branch. Failed worktrees are never reused implicitly. Previous attempt directories remain available for audit, while partial changes cannot contaminate a retry.
 
 ## Successful run
 
-1. Claude Code creates a read-only implementation plan.
-2. Codex edits the dedicated checkout with workspace-write sandboxing and automatic review.
-3. The worker runs the repository's deterministic test command.
-4. Grok independently reviews the uncommitted diff without edit/commit/push permission.
-5. The worker commits, pushes an `ai-dev-team/<run>` branch and creates a PR when GitHub CLI is available.
-6. The remote branch is verified. When `AI_DEV_TEAM_LIVE_URL` is configured, the live URL must also return a successful HTTP response.
-
-A normal successful run uses one Claude planning call, one Codex implementation call and one Grok review call. Deterministic QA does not consume model tokens.
+1. Claude creates a read-only implementation plan.
+2. Only Codex edits the dedicated checkout in its workspace-write sandbox.
+3. Deterministic QA runs in the hardened container boundary.
+4. Grok independently reviews the uncommitted diff without write permission.
+5. The worker commits, pushes an attempt-specific branch and creates a pull request.
+6. Delivery verification gates completion.
 
 ## Optional environment variables
 
 ```text
-AI_DEV_TEAM_TEST_COMMAND=npm test
-AI_DEV_TEAM_DEPLOY_COMMAND=npm run deploy
-AI_DEV_TEAM_LIVE_URL=https://example.vercel.app
-AI_DEV_TEAM_CLAUDE_MODEL=<optional>
-AI_DEV_TEAM_CODEX_MODEL=<optional>
-AI_DEV_TEAM_GROK_MODEL=<optional>
 AI_DEV_TEAM_POLL_MS=5000
 AI_DEV_TEAM_WORKSPACE_ROOT=~/.ai-dev-team/workspaces
+AI_DEV_TEAM_CONFIG_FILE=~/.ai-dev-team/config.json
+AI_DEV_TEAM_SANDBOX_ENGINE=docker
+AI_DEV_TEAM_SANDBOX_IMAGE=node:22-bookworm-slim
 ```
 
-Do not place ChatGPT, Claude or Grok credentials in these variables. Their CLIs read their own local subscription sessions.
+Do not place GitHub, Supabase, ChatGPT, Claude or Grok credentials in repository files or sandbox variables. Provider CLIs read their local subscription sessions only in the host-side agent stages.
